@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import random
 import time
-import comunicacionArduino
 from comunicacionArduino import send_command_external
 import threading
 

@@ -48,9 +48,9 @@ def send_command(command):
     else:
         if bt_connection and bt_connection.is_open:
             try:
-                # Agregar delimitador de nueva línea
-                bt_connection.write((command + '\n').encode('utf-8'))
+                bt_connection.write(command.encode('utf-8'))  # Enviar el comando como bytes
                 print(f"Comando enviado: {command}")
+                time.sleep(0.1)  # Pausa breve para evitar congestión
             except Exception as e:
                 print(f"Error al enviar el comando: {e}")
         else:
@@ -109,25 +109,3 @@ def simulate_response(command):
         response = responses.get(command, "Comando no reconocido en simulación")
         print(f"[Simulación] Arduino dice: {response}")
     threading.Thread(target=delayed_response, daemon=True).start()
-
-# ==============================
-# Hilo para Leer Datos del Arduino (Modo Real)
-# ==============================
-
-def serial_read_thread():
-    if not SIMULATION_MODE and bt_connection and bt_connection.is_open:
-        while True:
-            try:
-                if bt_connection.in_waiting > 0:
-                    data = bt_connection.readline().decode('utf-8').strip()
-                    if data:
-                        print(f"Arduino dice: {data}")
-                time.sleep(0.1)  # Reducir la frecuencia de lectura para evitar sobrecarga
-            except Exception as e:
-                print(f"Error en el hilo de lectura: {e}")
-                break
-
-# Iniciar el hilo de lectura si no está en modo de simulación
-if not SIMULATION_MODE and bt_connection and bt_connection.is_open:
-    read_thread = threading.Thread(target=serial_read_thread, daemon=True)
-    read_thread.start()
