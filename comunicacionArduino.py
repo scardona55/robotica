@@ -2,6 +2,7 @@
 import serial
 import time
 import threading
+import queue
 
 # ==============================
 # Configuración del Modo de Simulación
@@ -14,11 +15,14 @@ SIMULATION_MODE = True  # Establece en True para activar el modo de simulación
 # ==============================
 
 # Configuración del puerto serial
-PORT = "COM5"  # Cambia esto según el puerto asignado al Bluetooth
+PORT = "COM5"  # Cambia esto según el puerto asignado al Bluetooth o USB
 BAUD_RATE = 115200  # Velocidad de comunicación
 
 # Variable global para la conexión serial
 bt_connection = None
+
+# Cola para manejar las respuestas del Arduino
+response_queue = queue.Queue()
 
 if not SIMULATION_MODE:
     # Crear la conexión serial solo si no está en modo de simulación
@@ -58,21 +62,20 @@ def send_command(command):
 
 def read_from_arduino():
     """
-    Lee datos del Arduino.
-    En modo de simulación, retorna una respuesta simulada.
+    Lee datos del Arduino y los pone en la cola de respuestas.
+    En modo de simulación, no hace nada.
     """
     if SIMULATION_MODE:
-        # En modo de simulación, podrías retornar respuestas predefinidas o aleatorias
-        # Por simplicidad, no retornamos nada aquí
         return None
     else:
-        if bt_connection and bt_connection.is_open and bt_connection.in_waiting > 0:
+        if bt_connection and bt_connection.is_open:
             try:
-                data = bt_connection.readline().decode('utf-8').strip()
-                return data
+                while True:
+                    data = bt_connection.readline().decode('utf-8').strip()
+                    if data:
+                        response_queue.put(data)
             except Exception as e:
                 print(f"Error al leer del Arduino: {e}")
-        return None
 
 def close_connection():
     """
@@ -118,14 +121,14 @@ def serial_read_thread():
     if not SIMULATION_MODE and bt_connection and bt_connection.is_open:
         while True:
             try:
-                if bt_connection.in_waiting > 0:
-                    data = bt_connection.readline().decode('utf-8').strip()
-                    if data:
-                        print(f"Arduino dice: {data}")
-                time.sleep(0.1)  # Reducir la frecuencia de lectura para evitar sobrecarga
+                data = bt_connection.readline().decode('utf-8').strip()
+                if data:
+                    response_queue.put(data)
             except Exception as e:
                 print(f"Error en el hilo de lectura: {e}")
                 break
+    else:
+        pass  # No hacer nada en modo simulación
 
 # Iniciar el hilo de lectura si no está en modo de simulación
 if not SIMULATION_MODE and bt_connection and bt_connection.is_open:
