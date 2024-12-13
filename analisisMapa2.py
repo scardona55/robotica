@@ -6,6 +6,7 @@ import threading
 import comunicacionArduino  # Asegúrate de que el nombre del archivo sea correcto
 import queue
 import math
+import time
 
 # ==============================
 # Configuración de la Fuente de Video
@@ -14,10 +15,10 @@ import math
 # Modo de fuente de video
 # Establece SOURCE_URL en True para usar la URL de DroidCam
 # Establece SOURCE_URL en False para usar la cámara incorporada del computador
-SOURCE_URL = False  # Cambiar a True para DroidCam, False para cámara local
+SOURCE_URL = True  # Cambiar a True para DroidCam, False para cámara local
 
 # URL de DroidCam
-URL = "http://192.168.37.118:4747/video"
+URL = "http://10.144.88.177:4747/video"
 
 # Índice de la cámara incorporada (normalmente 0)
 CAMERA_INDEX = 0
@@ -337,6 +338,11 @@ def serial_response_display_thread():
         except queue.Empty:
             continue
 
+def move_forward():
+    """Envia el comando para mover el robot hacia adelante"""
+    print("Moviendo hacia adelante...")
+    comunicacionArduino.send_command('w')  # Comando para mover hacia adelante
+
 # ==============================
 # Inicio del Programa Principal
 # ==============================
@@ -354,9 +360,13 @@ if __name__ == "__main__":
     if SOURCE_URL:
         cap = cv2.VideoCapture(URL)
         print(f"Usando la URL de DroidCam: {URL}")
+        #move_forward()  # Mueve el robot hacia adelante
+        #time.sleep(1)
     else:
         cap = cv2.VideoCapture(CAMERA_INDEX)
         print(f"Usando la cámara incorporada del computador (Índice: {CAMERA_INDEX})")
+        #move_forward()
+        #time.sleep(1)
 
     if not cap.isOpened():
         print("No se pudo conectar a la cámara seleccionada.")
@@ -405,6 +415,8 @@ if __name__ == "__main__":
             # Mostrar información de los QR detectados
             for qr in detected_qrs:
                 print(qr)
+
+            
 
             # Presiona 'q' en la ventana de video para salir
             if cv2.waitKey(1) & 0xFF == ord('q'):

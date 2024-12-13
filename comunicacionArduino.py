@@ -8,14 +8,14 @@ import queue
 # Configuración del Modo de Simulación
 # ==============================
 
-SIMULATION_MODE = True  # Establece en True para activar el modo de simulación
+SIMULATION_MODE = False  # Establece en True para activar el modo de simulación
 
 # ==============================
 # Configuración de la Comunicación Serial
 # ==============================
 
 # Configuración del puerto serial
-PORT = "COM5"  # Cambia esto según el puerto asignado al Bluetooth o USB
+PORT = "COM3"  # Cambia esto según el puerto asignado al Bluetooth o USB
 BAUD_RATE = 115200  # Velocidad de comunicación
 
 # Variable global para la conexión serial

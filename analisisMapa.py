@@ -1,43 +1,46 @@
 import cv2
 import numpy as np
 import random
-import time
-from comunicacionArduino import send_command_external
 import threading
+import comunicacionArduino  # Asegúrate de que el nombre del archivo sea correcto
+import queue
+import math
+import time
 
+# ==============================
+# Configuración de la Fuente de Video
+# ==============================
+
+# Modo de fuente de video
+# Establece SOURCE_URL en True para usar la URL de DroidCam
+# Establece SOURCE_URL en False para usar la cámara incorporada del computador
+SOURCE_URL = True  # Cambiar a True para DroidCam, False para cámara local
 
 # URL de DroidCam
-url = "http://192.168.1.5:4747/video"
+URL = "http://10.144.88.77:4747/video"
+
+# Índice de la cámara incorporada (normalmente 0)
+CAMERA_INDEX = 0
+
+# ==============================
+# Parámetros de la Cuadrícula y Canny
+# ==============================
 
 # Parámetros de la cuadrícula
 rows = 7  # Número de filas
 cols = 7  # Número de columnas
 thickness = 1  # Grosor de las líneas
-shape_detected_this_session = False
 
-# Valores iniciales de Canny
+# Valores iniciales de Canny (puedes ajustar si es necesario)
 canny_threshold1 = 50
 canny_threshold2 = 150
 
-command_count = 0
-last_detected_shape = None
+# Variable de control para el bucle principal
+running = True
 
-def initialize_camera(url):
-    """Función para inicializar la cámara con manejo de errores."""
-    cap = cv2.VideoCapture(url)
-    intentos = 0
-    while not cap.isOpened() and intentos < 5:
-        print(f"Intento {intentos + 1}: Conectando a la cámara...")
-        cap = cv2.VideoCapture(url)
-        intentos += 1
-        time.sleep(1)  # Esperar un segundo entre intentos
-    
-    if not cap.isOpened():
-        print("No se pudo conectar a la cámara después de varios intentos.")
-        return None
-    
-    print(f"Conexión exitosa a la cámara. Resolución: {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}x{cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
-    return cap
+# ==============================
+# Funciones de Generación y Dibujo del Laberinto
+# ==============================
 
 def maze_generate(filas, columnas):
     """
@@ -93,95 +96,154 @@ def draw_grid(frame, rows, cols, thickness=1):
         cv2.line(frame, (j * cell_width, 0), (j * cell_width, height), (0, 255, 0), thickness)
     return frame
 
-def detect_shapes_in_image(image, rows, cols, threshold1, threshold2, dilatacion):
+def calculate_angle(points):
     """
-    Detecta círculos y triángulos en la imagen completa y calcula las celdas correspondientes.
-    Limita la detección a una sola forma.
+    Calcula el ángulo de inclinación en grados de un código QR dado.
+    Se basa en las coordenadas de las esquinas.
     """
-    global last_detected_shape
+    # Extraer las coordenadas de las esquinas superiores izquierda y derecha
+    top_left = points[0]
+    top_right = points[1]
 
-    # Si ya se detectó una forma, no hacer más detecciones
-    if last_detected_shape is not None:
-        return [], image
+    # Calcular el ángulo en radianes
+    delta_y = top_right[1] - top_left[1]
+    delta_x = top_right[0] - top_left[0]
+    angle = np.arctan2(delta_y, delta_x)  # Ángulo en radianes
 
-    detected_shapes = []
-    height, width, _ = image.shape
-    cell_height = height // rows
-    cell_width = width // cols
+    # Convertir a grados
+    return np.degrees(angle)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+def normalize_angle(angle):
+    """
+    Normaliza el ángulo para que esté entre 0° y 360°.
+    El ángulo aumenta en sentido contrario a las manecillas del reloj.
+    """
+    angle = angle % 360  # Asegura que el ángulo esté dentro del rango [0, 360)
+    if angle < 0:
+        angle += 360  # Convertir a un ángulo positivo
+    return angle
 
-    # Detección de círculos
-    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-    circles = cv2.HoughCircles(
-        blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
-        param1=50, param2=30, minRadius=10, maxRadius=50
-    )
+def detect_qr_in_image(image, rows, cols, qr_detector):
+    """
+    Detecta códigos QR en la imagen, calcula su ángulo de inclinación,
+    determina su posición en la cuadrícula y dibuja información relevante.
+    """
+    detected_qrs = []
 
-    # Procesar círculos detectados
-    if circles is not None:
-        circles = np.round(circles[0, :]).astype("int")
-        for circle in circles:
-            center_x, center_y, radius = circle
-            row = center_y // cell_height
-            col = center_x // cell_width
-            cell_index = row * cols + col
+    # Detectar y decodificar un solo código QR
+    data, points, _ = qr_detector.detectAndDecode(image)
 
-            detected_shapes.append({
-                "shape": "circle",
-                "row": row,
-                "col": col,
-                "cell_index": cell_index,
-                "x": center_x,
-                "y": center_y
-            })
-            
-            last_detected_shape = detected_shapes[0]
-            print(f"Círculo detectado en celda: {cell_index}, Posición: ({row}, {col})")
-            return detected_shapes, image
+    if points is not None:
+        points = points.reshape((-1, 2)).astype(int)
 
-    # Detección de triángulos
-    bordes = cv2.Canny(gray, threshold1, threshold2)
-    kernel = np.ones((dilatacion, dilatacion), np.uint8)
-    bordes = cv2.dilate(bordes, kernel)
-    cv2.imshow("Bordes Modificado", bordes)
-    figuras, jerarquia = cv2.findContours(bordes, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # Dibujar los recuadros alrededor del código QR
+        for i in range(len(points)):
+            cv2.line(image, tuple(points[i]), tuple(points[(i + 1) % len(points)]), (0, 255, 0), 3)
 
-    if jerarquia is not None:
-        jerarquia = jerarquia[0]
-        for i, contour in enumerate(figuras):
-            if jerarquia[i][3] == -1:
-                approx = cv2.approxPolyDP(contour, 0.05 * cv2.arcLength(contour, True), True)
-                area = cv2.contourArea(contour)
-                if len(approx) == 3 and area >= 500 and area < 3000:  # Triángulo
-                    x, y, w, h = cv2.boundingRect(contour)
-                    center_x, center_y = x + w // 2, y + h // 2
-                    row = center_y // cell_height
-                    col = center_x // cell_width
-                    cell_index = row * cols + col
+        # Calcular la inclinación
+        angle = calculate_angle(points)
 
-                    detected_shapes.append({
-                        "shape": "triangle",
-                        "row": row,
-                        "col": col,
-                        "cell_index": cell_index,
-                        "x": center_x,
-                        "y": center_y
-                    })
-                    
-                    last_detected_shape = detected_shapes[0]
-                    print(f"Triángulo detectado en celda: {cell_index}, Posición: ({row}, {col})")
-                    return detected_shapes, image
+        # Normalizar el ángulo para que esté en el rango [0, 360]
+        angle = normalize_angle(angle)
 
-    return [], image
+        # Calcular el centro del QR
+        qr_center_x = int(np.mean(points[:, 0]))
+        qr_center_y = int(np.mean(points[:, 1]))
+        qr_center = (qr_center_x, qr_center_y)
 
-# Añadir una función para reiniciar la detección cuando sea necesario
-def reset_shape_detection():
-    global shape_detected_this_session
-    shape_detected_this_session = False
+        # Calcular la fila y columna de la cuadrícula
+        height, width = image.shape[:2]
+        cell_width = width / cols
+        cell_height = height / rows
+
+        # Calcular en qué celda (fila, columna) se encuentra el centro del QR
+        row = int(qr_center_y // cell_height)
+        col = int(qr_center_x // cell_width)
+
+        # Calcular el centro de la celda
+        cell_center_x = int((col + 0.5) * cell_width)
+        cell_center_y = int((row + 0.5) * cell_height)
+        cell_center = (cell_center_x, cell_center_y)
+
+        # Flecha indicando cero grados (horizontal a la derecha) desde el centro
+        arrow_tip_zero = (qr_center_x + 50, qr_center_y)  # Flecha hacia la derecha (0°)
+        cv2.arrowedLine(image, qr_center, arrow_tip_zero, (0, 0, 255), 2, tipLength=0.3)
+
+        # Flecha azul indicando el ángulo detectado
+        angle_rad = np.radians(angle)
+        arrow_tip_blue = (int(qr_center_x + 100 * np.cos(angle_rad)), int(qr_center_y + 100 * np.sin(angle_rad)))
+        cv2.arrowedLine(image, qr_center, arrow_tip_blue, (255, 0, 0), 2, tipLength=0.3)
+
+        # Mostrar los datos y la inclinación en pantalla
+        if data:
+            # Puedes descomentar la siguiente línea para mostrar el contenido del QR
+            # cv2.putText(image, f"QR: {data}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+            pass
+
+        # Invertir el ángulo si es necesario (según tus necesidades)
+        angle2 = 360 - angle
+
+        # Guardar los resultados con la fila y columna
+        cell_index = row * cols + col  # Índice de la celda
+
+        detected_qrs.append({
+            "shape": data,
+            "angle": angle2,
+            "x": qr_center_x,
+            "y": qr_center_y,
+            "cell_center_x": cell_center_x,
+            "cell_center_y": cell_center_y,
+            "cell_index": cell_index,
+            "row": row,
+            "col": col
+        })
+
+        # Mostrar información en la imagen
+        cv2.putText(
+            image,
+            f"{cell_index}",
+            (qr_center_x - 10, qr_center_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2
+        )
+        cv2.putText(
+            image,
+            f"{qr_center_x},{qr_center_y}",
+            (qr_center_x - 30, qr_center_y + 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2
+        )
+        cv2.putText(image, f"{angle2:.2f}°", (qr_center_x - 30, qr_center_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255),
+                    2, cv2.LINE_AA)
+
+        # Dibujar líneas punteadas dentro de la celda
+        image = draw_dotted_line_in_cell(image, cell_center_x, cell_center_y, cell_width, cell_height)
+
+    return detected_qrs, image
+
+def draw_dotted_line_in_cell(image, cell_center_x, cell_center_y, cell_width, cell_height):
+    """Dibuja una línea punteada roja dentro de la celda en los ejes del centro de la celda."""
+    # Definir los límites de la celda
+    cell_left = int(cell_center_x - cell_width // 2)
+    cell_right = int(cell_center_x + cell_width // 2)
+    cell_top = int(cell_center_y - cell_height // 2)
+    cell_bottom = int(cell_center_y + cell_height // 2)
+
+    # Dibujar línea punteada roja en el eje horizontal
+    for x in range(cell_left, cell_right, 10):  # Incremento para punteado
+        cv2.line(image, (x, cell_center_y), (x + 5, cell_center_y), (0, 0, 255), 1)
+
+    # Dibujar línea punteada roja en el eje vertical
+    for y in range(cell_top, cell_bottom, 10):  # Incremento para punteado
+        cv2.line(image, (cell_center_x, y), (cell_center_x, y + 5), (0, 0, 255), 1)
+    return image
 
 def fill_cells(frame, matrix, alpha=0.7):
-    """Rellena de color negro translúcido los cuadrantes correspondientes a los valores '1' en la matriz."""
+    """Rellena de color rojo translúcido los cuadrantes correspondientes a los valores '1' en la matriz."""
     rows, cols = len(matrix), len(matrix[0])
     height, width, _ = frame.shape
     cell_height = height // rows
@@ -195,10 +257,10 @@ def fill_cells(frame, matrix, alpha=0.7):
                 # Coordenadas del cuadrante
                 x1, y1 = j * cell_width, i * cell_height
                 x2, y2 = x1 + cell_width, y1 + cell_height
-                # Rellenar el cuadrante con color negro (translúcido)
+                # Rellenar el cuadrante con color rojo (translúcido)
                 cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 255), -1)
 
-    # Aplicar transparencia a los rectángulos negros
+    # Aplicar transparencia a los rectángulos rojos
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
     return frame
@@ -226,152 +288,196 @@ def highlight_start_end(frame, rows, cols):
 
     return frame
 
-def menu_control():
-    """
-    Muestra un menú por consola para controlar el robot y envía comandos.
-    """
-    global command_count, last_detected_shape
-    
-    print("\n--- Menú de Control ---")
-    print("w - Adelante")
-    print("s - Atrás")
-    print("a - Izquierda")
-    print("d - Derecha")
-    print("x - Detener")
-    print("q - Salir")
-    print("-----------------------")
-    opcion = input("Selecciona una opción: ").strip()
-
-    # Mapear la opción a un comando
-    comandos = {
-        "w": "arriba",
-        "s": "abajo",
-        "a": "izquierda",
-        "d": "derecha",
-        "x": "detener",
-    }
-
-    if opcion == "q":
-        print("Saliendo del control...")
-        return False
-    elif opcion in comandos:
-        command = comandos[opcion]
-        send_command_and_track(command)
-        return True
-    else:
-        print("Opción inválida. Inténtalo de nuevo.")
-        return True
-
-def send_command_and_track(command):
-    """
-    Envía un comando y lleva un conteo de los comandos enviados.
-    Imprime información de detección cada 3 comandos.
-    """
-    global command_count, last_detected_shape
-
-    # Enviar comando a través de comunicacionArduino
-    send_command_external(command)
-
-    # Incrementar contador de comandos
-    command_count += 1
-
-    # Reiniciar la detección de formas cada cierto número de comandos
-    if command_count % 3 == 0:
-        last_detected_shape = None
-
 def on_trackbar_change(x):
     """Callback para manejar los cambios en las trackbars."""
     pass
 
-def handle_console_input():
+# ==============================
+# Función para Manejar la Entrada de Comandos
+# ==============================
+
+def command_input_thread():
     """Hilo para manejar la entrada de comandos desde la consola."""
-    while True:
-        command = input("Introduce un comando ('m' para menú, 'q' para salir): ").strip()
-        if command == 'q':
-            print("Saliendo...")
-            break
-        elif command == 'm':
-            menu_control()  # Mostrar el menú solo si se solicita explícitamente
-        else:
-            print(f"Comando no reconocido: {command}")
-    global stop_main_loop
-    stop_main_loop = True  # Señal para detener la cámara y el bucle principal
+    global running
+    try:
+        while running:
+            print("\nControl del mBot:")
+            print("w - Adelante")
+            print("s - Atrás")
+            print("a - Izquierda")
+            print("d - Derecha")
+            print("x - Detener")
+            print("q - Salir")
+            command = input("Ingresa un comando: ").strip().lower()
 
-def main_loop():
-    global cap, command_count, last_detected_shape, stop_main_loop
+            if command == 'q':  # Salir del programa
+                print("Cerrando conexión y terminando programa...")
+                running = False
+                comunicacionArduino.send_command(command)  # Enviar comando de cierre al Arduino
+                break
+            elif command in ['w', 's', 'a', 'd', 'x']:
+                print(f"Enviando comando: {command}")  # Depuración
+                comunicacionArduino.send_command(command)  # Enviar el comando válido
+            else:
+                print("Comando no reconocido")
+    except KeyboardInterrupt:
+        print("\nInterrupción por teclado.")
+        running = False
 
-    # Crear ventana y trackbars
-    cv2.namedWindow('Ajustes')
-    cv2.createTrackbar('Canny Th1', 'Ajustes', canny_threshold1, 255, on_trackbar_change)
-    cv2.createTrackbar('Canny Th2', 'Ajustes', canny_threshold2, 255, on_trackbar_change)
-    cv2.createTrackbar('Dilatacion', 'Ajustes', 2, 15, on_trackbar_change)
-    
-    maze = maze_generate(rows, cols)
-    print("Laberinto generado:")
-    for fila in maze:
-        print(fila)
+# ==============================
+# Hilo para Leer y Mostrar Respuestas
+# ==============================
 
-    while not stop_main_loop:
-        # Verificar si la cámara está abierta
-        if not cap or not cap.isOpened():
-            print("Reconectando cámara...")
-            cap = initialize_camera(url)
-            if not cap:
-                time.sleep(2)
-                continue
-
-        ret, frame = cap.read()
-        if not ret:
-            print("Error al capturar el frame. Reintentando...")
-            time.sleep(1)
+def serial_response_display_thread():
+    """Hilo para leer y mostrar respuestas del Arduino desde la cola."""
+    while running:
+        try:
+            response = comunicacionArduino.response_queue.get(timeout=0.1)
+            print(f"Arduino dice: {response}")
+        except queue.Empty:
             continue
 
-        # Obtener valores de las trackbars
-        threshold1 = cv2.getTrackbarPos('Canny Th1', 'Ajustes')
-        threshold2 = cv2.getTrackbarPos('Canny Th2', 'Ajustes')
-        dilatacion = cv2.getTrackbarPos('Dilatacion', 'Ajustes')
+# =================
+# Funciones agregadas por Juan
+# =======
+def orient_qr_up():
+    """
+    Asegura que el QR esté orientado hacia arriba.
+    Si el QR no está orientado hacia arriba, el robot girará hacia la derecha
+    hasta que esté correctamente alineado.
+    """
+    # Obtener las coordenadas del QR y calcular el ángulo de orientación
+    points = detect_qr_in_image()  # Debes implementar la función detect_qr_in_image para obtener las coordenadas del QR
+    current_angle = calculate_angle(points)
+    current_angle = normalize_angle(current_angle)
 
-        # Analizar el frame con los umbrales ajustados
-        detected_shapes, frame_with_shapes = detect_shapes_in_image(frame, rows, cols, threshold1, threshold2, dilatacion)
-        
-        # Dibujar la cuadrícula en el frame
-        frame_with_grid = draw_grid(frame_with_shapes, rows, cols, thickness)
-        frame = fill_cells(frame_with_grid, maze)
-        frame = highlight_start_end(frame, rows, cols)
+    # Ajustar la orientación hasta que el QR esté hacia arriba
+    while not (45 <= current_angle <= 135):  # Ángulo de 45° a 135° (orientación hacia arriba)
+        print("QR no orientado hacia arriba. Ajustando...")
+        comunicacionArduino.send_command('d')  # Girar a la derecha
+        time.sleep(1)  # Esperar un poco para permitir que el robot gire
+        points = detect_qr_in_image()  # Vuelve a detectar el QR
+        current_angle = calculate_angle(points)
+        current_angle = normalize_angle(current_angle)
+    print("QR orientado hacia arriba.")
 
-        # Mostrar el frame con los ajustes
-        cv2.imshow('Cuadrícula con análisis', frame)
+def is_in_first_row(robot_position):
+    """
+    Verifica si el robot está en la primera fila del mapa.
+    La primera fila es cualquier casilla cuyo índice de columna sea >= 0 y < cols.
+    """
+    return robot_position % cols != 0  # Verifica si está en la primera fila
 
-        # Manejo de la detección cada 3 comandos
-        if command_count % 3 == 0 and command_count > 0:
-            print(f"\n--- Detección de forma tras {command_count} comandos ---")
-            print(f"Última forma detectada: {last_detected_shape if last_detected_shape else 'No detectada'}")
-            print("-------------------------------------------\n")
+def move_to_first_cell():
+    """
+    Mueve el robot a la casilla 0,0 en la primera fila del laberinto,
+    asegurándose de que el QR esté orientado hacia arriba antes de comenzar.
+    """
+    # Asegurar que el QR esté orientado hacia arriba
+    orient_qr_up()
 
-        # Presiona 'q' para salir del video
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
+    # Verificar si el robot ya está en la primera fila
+    if is_in_first_row(robot_position):
+        # Si está en la primera fila pero no en la casilla 0, moverse hacia la izquierda
+        if robot_position != 0:
+            print("El robot no está en la casilla 0. Moviendo hacia la izquierda...")
+            while robot_position != 0:
+                comunicacionArduino.send_command('a')  # Mover hacia la izquierda
+                time.sleep(1)  # Espera un poco para permitir que el robot se mueva
+                robot_position -= 1  # Actualiza la posición del robot (asumimos que se mueve a la izquierda)
+    else:
+        # Si no está en la primera fila, mover hacia arriba
+        print("El robot no está en la primera fila. Moviendo hacia arriba...")
+        while not is_in_first_row(robot_position):
+            comunicacionArduino.send_command('w')  # Mover hacia arriba
+            time.sleep(1)  # Espera un poco para permitir que el robot se mueva
+            robot_position -= cols  # Actualiza la posición del robot (asumimos que se mueve hacia arriba)
 
-# Inicialización global
-stop_main_loop = False  # Variable para detener el bucle principal
-try:
-    cap = initialize_camera(url)
-    if cap:
-        # Crear un hilo para manejar la entrada de consola
-        console_thread = threading.Thread(target=handle_console_input, daemon=True)
-        console_thread.start()
+        # Luego de llegar a la primera fila, repetir el proceso para mover a la casilla 0
+        move_to_first_cell()
 
-        # Ejecutar el bucle principal
-        main_loop()
 
-        # Esperar a que el hilo de consola termine
-        console_thread.join()
-except Exception as e:
-    print(f"Se produjo un error: {e}")
-finally:
-    # Liberar recursos y cerrar ventanas
-    if cap and cap.isOpened():
-        cap.release()
+
+# ==============================
+# Inicio del Programa Principal
+# ==============================
+
+if __name__ == "_main_":
+    # Iniciar el hilo de entrada de comandos
+    input_thread = threading.Thread(target=command_input_thread, daemon=True)
+    input_thread.start()
+
+    # Iniciar el hilo de lectura de respuestas
+    response_display_thread = threading.Thread(target=serial_response_display_thread, daemon=True)
+    response_display_thread.start()
+
+    # Abrir la fuente de video según la configuración
+    if SOURCE_URL:
+        cap = cv2.VideoCapture(URL)
+        print(f"Usando la URL de DroidCam: {URL}")
+    else:
+        cap = cv2.VideoCapture(CAMERA_INDEX)
+        print(f"Usando la cámara incorporada del computador (Índice: {CAMERA_INDEX})")
+
+    if not cap.isOpened():
+        print("No se pudo conectar a la cámara seleccionada.")
+        running = False
+    else:
+        print(f"Conexión exitosa. Analizando video con cuadrícula de {rows}x{cols}...")
+        maze = maze_generate(rows, cols)
+        print("Mapa generado:")
+        for fila in maze:
+            print(fila)
+
+        # Crear ventana y trackbars
+        cv2.namedWindow('Ajustes')
+        cv2.createTrackbar('Canny Th1', 'Ajustes', canny_threshold1, 255, on_trackbar_change)
+        cv2.createTrackbar('Canny Th2', 'Ajustes', canny_threshold2, 255, on_trackbar_change)
+        cv2.createTrackbar('Dilatacion', 'Ajustes', 2, 15, on_trackbar_change)
+
+        qr_detector = cv2.QRCodeDetector()
+
+        while running:
+            ret, frame = cap.read()
+            if not ret:
+                print("Error al capturar el video.")
+                break
+
+            # Obtener valores de las trackbars
+            threshold1 = cv2.getTrackbarPos('Canny Th1', 'Ajustes')
+            threshold2 = cv2.getTrackbarPos('Canny Th2', 'Ajustes')
+            dilatacion = cv2.getTrackbarPos('Dilatacion', 'Ajustes')
+
+            # Analizar el frame con los umbrales ajustados
+            detected_qrs, frame_with_shapes = detect_qr_in_image(frame, rows, cols, qr_detector)
+
+            # Dibujar la cuadrícula en el frame
+            frame_with_grid = draw_grid(frame_with_shapes, rows, cols, thickness)
+
+            # Rellenar las celdas del laberinto
+            frame_filled = fill_cells(frame_with_grid, maze)
+
+            # Resaltar las celdas de inicio y fin
+            frame_highlighted = highlight_start_end(frame_filled, rows, cols)
+
+            # Mostrar el frame con los ajustes
+            cv2.imshow('Cuadrícula con análisis', frame_highlighted)
+
+            # Mostrar información de los QR detectados
+            for qr in detected_qrs:
+                print(qr)
+
+            # Presiona 'q' en la ventana de video para salir
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("Presionaste 'q'. Cerrando conexión y terminando programa...")
+                running = False
+                comunicacionArduino.send_command('q')  # Enviar comando de cierre al Arduino
+                break
+    move_to_first_cell()
+
+    # Libera recursos
+    cap.release()
     cv2.destroyAllWindows()
-    print("Recursos liberados. Aplicación finalizada correctamente.")
+
+    # Cerrar la conexión serial si está abierta
+    comunicacionArduino.close_connection()
