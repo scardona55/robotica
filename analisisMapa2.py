@@ -18,7 +18,7 @@ import time
 SOURCE_URL = True  # Cambiar a True para DroidCam, False para cámara local
 
 # URL de DroidCam
-URL = "http://10.144.88.177:4747/video"
+URL = "http://192.168.37.118:4747/video"
 
 # Índice de la cámara incorporada (normalmente 0)
 CAMERA_INDEX = 0
@@ -38,6 +38,7 @@ canny_threshold2 = 150
 
 # Variable de control para el bucle principal
 running = True
+
 
 # ==============================
 # Funciones de Generación y Dibujo del Laberinto
@@ -339,9 +340,30 @@ def serial_response_display_thread():
             continue
 
 def move_forward():
-    """Envia el comando para mover el robot hacia adelante"""
+    """Envía el comando para mover el robot hacia adelante."""
     print("Moviendo hacia adelante...")
     comunicacionArduino.send_command('w')  # Comando para mover hacia adelante
+
+def move_back():
+    """Envía el comando para mover el robot hacia atrás."""
+    print("Moviendo hacia atrás...")
+    comunicacionArduino.send_command('s')  # Comando para mover hacia atrás
+
+def turn_left():
+    """Envía el comando para girar el robot a la izquierda."""
+    print("Girando a la izquierda...")
+    comunicacionArduino.send_command('a')  # Comando para girar a la izquierda
+
+def turn_right():
+    """Envía el comando para girar el robot a la derecha."""
+    print("Girando a la derecha...")
+    comunicacionArduino.send_command('d')  # Comando para girar a la derecha
+
+# ==============================
+# Funciones de Lógica para el Movimiento
+# ==============================
+
+
 
 # ==============================
 # Inicio del Programa Principal

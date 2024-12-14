@@ -1,3 +1,4 @@
+# analisisMapa.py
 import cv2
 import numpy as np
 import random
@@ -17,7 +18,7 @@ import time
 SOURCE_URL = True  # Cambiar a True para DroidCam, False para cámara local
 
 # URL de DroidCam
-URL = "http://10.144.88.77:4747/video"
+URL = "http://192.168.37.118:4747/video"
 
 # Índice de la cámara incorporada (normalmente 0)
 CAMERA_INDEX = 0
@@ -311,12 +312,12 @@ def command_input_thread():
             command = input("Ingresa un comando: ").strip().lower()
 
             if command == 'q':  # Salir del programa
-                print("Cerrando conexión y terminando programa...")
+                #print("Cerrando conexión y terminando programa...")
                 running = False
                 comunicacionArduino.send_command(command)  # Enviar comando de cierre al Arduino
                 break
             elif command in ['w', 's', 'a', 'd', 'x']:
-                print(f"Enviando comando: {command}")  # Depuración
+                #print(f"Enviando comando: {command}")  # Depuración
                 comunicacionArduino.send_command(command)  # Enviar el comando válido
             else:
                 print("Comando no reconocido")
@@ -337,79 +338,162 @@ def serial_response_display_thread():
         except queue.Empty:
             continue
 
-# =================
-# Funciones agregadas por Juan
-# =======
-def orient_qr_up():
+def move_forward():
+    """Envía el comando para mover el robot hacia adelante."""
+    #print("Moviendo hacia adelante...")
+    comunicacionArduino.send_command('w')  # Comando para mover hacia adelante
+
+def move_back():
+    """Envía el comando para mover el robot hacia atrás."""
+    #print("Moviendo hacia atrás...")
+    comunicacionArduino.send_command('s')  # Comando para mover hacia atrás
+
+def turn_left():
+    """Envía el comando para girar el robot a la izquierda."""
+    #print("Girando a la izquierda...")
+    comunicacionArduino.send_command('a')  # Comando para girar a la izquierda
+
+def turn_right():
+    """Envía el comando para girar el robot a la derecha."""
+    #print("Girando a la derecha...")
+    comunicacionArduino.send_command('d')  # Comando para girar a la derecha
+
+# ==============================
+# Funciones de Lógica para el Movimiento
+# ==============================
+
+def ajustar_orientacion(current_angle):
     """
-    Asegura que el QR esté orientado hacia arriba.
-    Si el QR no está orientado hacia arriba, el robot girará hacia la derecha
-    hasta que esté correctamente alineado.
+    Ajusta la orientación del robot para que quede alineado con 90 grados (hacia arriba).
+    Gira a la derecha si el ángulo es menor a 90, o a la izquierda si es mayor.
+    Implementa un sistema anti-errores para verificar que la orientación cambia correctamente.
     """
-    # Obtener las coordenadas del QR y calcular el ángulo de orientación
-    points = detect_qr_in_image()  # Debes implementar la función detect_qr_in_image para obtener las coordenadas del QR
-    current_angle = calculate_angle(points)
-    current_angle = normalize_angle(current_angle)
+    print(f"Ajustando orientación. Ángulo actual: {current_angle:.2f} grados")
 
-    # Ajustar la orientación hasta que el QR esté hacia arriba
-    while not (45 <= current_angle <= 135):  # Ángulo de 45° a 135° (orientación hacia arriba)
-        print("QR no orientado hacia arriba. Ajustando...")
-        comunicacionArduino.send_command('d')  # Girar a la derecha
-        time.sleep(1)  # Esperar un poco para permitir que el robot gire
-        points = detect_qr_in_image()  # Vuelve a detectar el QR
-        current_angle = calculate_angle(points)
-        current_angle = normalize_angle(current_angle)
-    print("QR orientado hacia arriba.")
+    # Definir margen de tolerancia
+    margen = 20  # grados
 
-def is_in_first_row(robot_position):
+    while abs(current_angle - 90) > margen:
+        if current_angle < 90:
+            for _ in range(5):
+                #print("Girando a la derecha para alinear...")
+                turn_right()
+        elif current_angle > 90:
+            for _ in range(5):
+                #print("Girando a la izquierda para alinear...")
+                turn_left()
+
+        # Esperar un momento para que el robot gire
+        time.sleep(1)
+
+        # Re-detectar el QR para obtener el nuevo ángulo
+        ret, new_frame = cap.read()
+        if not ret:
+            print("Error al capturar el video durante el ajuste de orientación.")
+            return False
+
+        new_detected_qrs, _ = detect_qr_in_image(new_frame, rows, cols, qr_detector)
+        if new_detected_qrs:
+            new_qr = new_detected_qrs[0]
+            new_angle = new_qr['angle']
+            print(f"Nuevo ángulo detectado: {new_angle:.2f} grados")
+
+            # Verificar si el ángulo ha cambiado
+            if abs(new_angle - current_angle) < 5:
+                print("Error: El ángulo no ha cambiado después del giro.")
+                return False  # Error
+            else:
+                current_angle = new_angle
+        else:
+            print("Error: No se detecta el QR durante el ajuste de orientación.")
+            return False  # Error
+
+    print("Orientación alineada a 90 grados.")
+    return True  # Éxito
+
+def mover_a_cero_zero(current_row, current_col):
     """
-    Verifica si el robot está en la primera fila del mapa.
-    La primera fila es cualquier casilla cuyo índice de columna sea >= 0 y < cols.
+    Mueve al robot hasta la posición (0, 0) en la cuadrícula.
+    Utiliza las coordenadas actuales y mueve el robot en dirección vertical u horizontal.
+    Implementa un sistema anti-errores para verificar que la posición cambia correctamente.
     """
-    return robot_position % cols != 0  # Verifica si está en la primera fila
+    print(f"Moviéndose hacia (0, 0) desde la posición actual: fila {current_row}, columna {current_col}")
 
-def move_to_first_cell():
-    """
-    Mueve el robot a la casilla 0,0 en la primera fila del laberinto,
-    asegurándose de que el QR esté orientado hacia arriba antes de comenzar.
-    """
-    # Asegurar que el QR esté orientado hacia arriba
-    orient_qr_up()
+    # Mover hacia arriba hasta fila 0
+    while current_row > 0:
+        #print(f"Moviendo hacia arriba. Fila actual: {current_row}")
+        move_forward()
+        time.sleep(1)  # Espera a que el robot se mueva
+        current_row -= 1  # Asumir que el robot se mueve correctamente
 
-    # Verificar si el robot ya está en la primera fila
-    if is_in_first_row(robot_position):
-        # Si está en la primera fila pero no en la casilla 0, moverse hacia la izquierda
-        if robot_position != 0:
-            print("El robot no está en la casilla 0. Moviendo hacia la izquierda...")
-            while robot_position != 0:
-                comunicacionArduino.send_command('a')  # Mover hacia la izquierda
-                time.sleep(1)  # Espera un poco para permitir que el robot se mueva
-                robot_position -= 1  # Actualiza la posición del robot (asumimos que se mueve a la izquierda)
-    else:
-        # Si no está en la primera fila, mover hacia arriba
-        print("El robot no está en la primera fila. Moviendo hacia arriba...")
-        while not is_in_first_row(robot_position):
-            comunicacionArduino.send_command('w')  # Mover hacia arriba
-            time.sleep(1)  # Espera un poco para permitir que el robot se mueva
-            robot_position -= cols  # Actualiza la posición del robot (asumimos que se mueve hacia arriba)
+        # Verificar si el movimiento fue exitoso
+        ret, new_frame = cap.read()
+        if not ret:
+            #print("Error al capturar el video durante el movimiento hacia arriba.")
+            return False
 
-        # Luego de llegar a la primera fila, repetir el proceso para mover a la casilla 0
-        move_to_first_cell()
+        new_detected_qrs, _ = detect_qr_in_image(new_frame, rows, cols, qr_detector)
+        if new_detected_qrs:
+            new_qr = new_detected_qrs[0]
+            new_row = new_qr['row']
+            new_col = new_qr['col']
+            print(f"Nueva posición detectada: fila {new_row}, columna {new_col}")
 
+            if new_row >= current_row + 1:  # Debería haber disminuido la fila
+                current_row = new_row
+            else:
+                print("Error: El robot no ha movido hacia arriba correctamente.")
+                return False  # Error
+        else:
+            print("Error: No se detecta el QR durante el movimiento hacia arriba.")
+            return False  # Error
 
+    # Mover hacia la izquierda hasta columna 0
+    while current_col > 0:
+        #print(f"Moviendo hacia la izquierda. Columna actual: {current_col}")
+        turn_left()  # Girar a la izquierda para moverse hacia la izquierda
+        time.sleep(1)  # Espera a que el robot gire
+        move_forward()
+        time.sleep(1)  # Espera a que el robot se mueva
+        current_col -= 1  # Asumir que el robot se mueve correctamente
+
+        # Verificar si el movimiento fue exitoso
+        ret, new_frame = cap.read()
+        if not ret:
+            print("Error al capturar el video durante el movimiento hacia la izquierda.")
+            return False
+
+        new_detected_qrs, _ = detect_qr_in_image(new_frame, rows, cols, qr_detector)
+        if new_detected_qrs:
+            new_qr = new_detected_qrs[0]
+            new_row = new_qr['row']
+            new_col = new_qr['col']
+            #print(f"Nueva posición detectada: fila {new_row}, columna {new_col}")
+
+            if new_col >= current_col + 1:  # Debería haber disminuido la columna
+                current_col = new_col
+            else:
+                #print("Error: El robot no ha movido hacia la izquierda correctamente.")
+                return False  # Error
+        else:
+            #print("Error: No se detecta el QR durante el movimiento hacia la izquierda.")
+            return False  # Error
+
+    print("Robot ha llegado a la posición (0, 0).")
+    return True  # Éxito
 
 # ==============================
 # Inicio del Programa Principal
 # ==============================
 
-if __name__ == "_main_":
-    # Iniciar el hilo de entrada de comandos
-    input_thread = threading.Thread(target=command_input_thread, daemon=True)
-    input_thread.start()
+if __name__ == "__main__":
+    # Iniciar el hilo de entrada de comandos (comentado para movimiento automático)
+    # input_thread = threading.Thread(target=command_input_thread, daemon=True)
+    # input_thread.start()
 
-    # Iniciar el hilo de lectura de respuestas
-    response_display_thread = threading.Thread(target=serial_response_display_thread, daemon=True)
-    response_display_thread.start()
+    # Iniciar el hilo de lectura de respuestas (comentado para movimiento automático)
+    # response_display_thread = threading.Thread(target=serial_response_display_thread, daemon=True)
+    # response_display_thread.start()
 
     # Abrir la fuente de video según la configuración
     if SOURCE_URL:
@@ -437,13 +521,21 @@ if __name__ == "_main_":
 
         qr_detector = cv2.QRCodeDetector()
 
+        # Variables para controlar el estado del robot
+        orientation_aligned = False
+        movement_started = False
+
+        # Variables para almacenar la posición actual del robot
+        current_row = 2  # Asumir posición inicial en la fila 3 (índice 2)
+        current_col = 2  # Asumir posición inicial en la columna 3 (índice 2)
+
         while running:
             ret, frame = cap.read()
             if not ret:
                 print("Error al capturar el video.")
                 break
 
-            # Obtener valores de las trackbars
+            # Obtener valores de las trackbars (no utilizados en el movimiento automático, pero pueden ser útiles para otros)
             threshold1 = cv2.getTrackbarPos('Canny Th1', 'Ajustes')
             threshold2 = cv2.getTrackbarPos('Canny Th2', 'Ajustes')
             dilatacion = cv2.getTrackbarPos('Dilatacion', 'Ajustes')
@@ -463,9 +555,25 @@ if __name__ == "_main_":
             # Mostrar el frame con los ajustes
             cv2.imshow('Cuadrícula con análisis', frame_highlighted)
 
-            # Mostrar información de los QR detectados
+            # Procesar los QR detectados
             for qr in detected_qrs:
                 print(qr)
+                if not orientation_aligned:
+                    # Ajustar orientación basada en el ángulo detectado
+                    success = ajustar_orientacion(qr['angle'])
+                    if success:
+                        orientation_aligned = True  # Asumir que se ha alineado correctamente
+                    else:
+                        print("Error al ajustar la orientación.")
+                if orientation_aligned and not movement_started:
+                    # Mover hacia la posición (0,0) basándose en la fila y columna actuales
+                    success = mover_a_cero_zero(qr['row'], qr['col'])
+                    if success:
+                        movement_started = True  # Asumir que el movimiento ha sido iniciado
+                    else:
+                        print("Error al mover hacia (0,0).")
+                        running = False  # Detener el programa en caso de error
+                        break
 
             # Presiona 'q' en la ventana de video para salir
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -473,7 +581,6 @@ if __name__ == "_main_":
                 running = False
                 comunicacionArduino.send_command('q')  # Enviar comando de cierre al Arduino
                 break
-    move_to_first_cell()
 
     # Libera recursos
     cap.release()
