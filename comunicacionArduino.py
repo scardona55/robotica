@@ -15,7 +15,7 @@ SIMULATION_MODE = False  # Establece en True para activar el modo de simulación
 # ==============================
 
 # Configuración del puerto serial
-PORT = "COM3"  # Cambia esto según el puerto asignado al Bluetooth o USB
+PORT = "COM5"  # Cambia esto según el puerto asignado al Bluetooth o USB
 BAUD_RATE = 115200  # Velocidad de comunicación
 
 # Variable global para la conexión serial

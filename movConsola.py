@@ -7,6 +7,7 @@ import comunicacionArduino  # Asegúrate de que el nombre del archivo sea correc
 import queue
 import math
 import time
+import comunicacionBluetooth
 
 # ==============================
 # Configuración de la Fuente de Video
@@ -28,8 +29,8 @@ CAMERA_INDEX = 0
 # ==============================
 
 # Parámetros de la cuadrícula
-rows = 7  # Número de filas
-cols = 7  # Número de columnas
+rows = 4  # Número de filas
+cols = 4  # Número de columnas
 thickness = 1  # Grosor de las líneas
 
 # Valores iniciales de Canny (puedes ajustar si es necesario)
@@ -315,11 +316,11 @@ def command_input_thread():
             if command == 'q':  # Salir del programa
                 print("Cerrando conexión y terminando programa...")
                 running = False
-                comunicacionArduino.send_command(command)  # Enviar comando de cierre al Arduino
+                comunicacionBluetooth.send_command(command)  # Enviar comando de cierre al Arduino
                 break
             elif command in ['w', 's', 'a', 'd', 'x']:
                 print(f"Enviando comando: {command}")  # Depuración
-                comunicacionArduino.send_command(command)  # Enviar el comando válido
+                comunicacionBluetooth.send_command(command)  # Enviar el comando válido
             else:
                 print("Comando no reconocido")
     except KeyboardInterrupt:
@@ -334,30 +335,30 @@ def serial_response_display_thread():
     """Hilo para leer y mostrar respuestas del Arduino desde la cola."""
     while running:
         try:
-            response = comunicacionArduino.response_queue.get(timeout=0.1)
-            print(f"Arduino dice: {response}")
+            #response = comunicacionArduino.response_queue.get(timeout=0.1)
+            print(f"Arduino dice:")
         except queue.Empty:
             continue
 
 def move_forward():
     """Envía el comando para mover el robot hacia adelante."""
     print("Moviendo hacia adelante...")
-    comunicacionArduino.send_command('w')  # Comando para mover hacia adelante
+    comunicacionBluetooth.send_command('w')  # Comando para mover hacia adelante
 
 def move_back():
     """Envía el comando para mover el robot hacia atrás."""
     print("Moviendo hacia atrás...")
-    comunicacionArduino.send_command('s')  # Comando para mover hacia atrás
+    comunicacionBluetooth.send_command('s')  # Comando para mover hacia atrás
 
 def turn_left():
     """Envía el comando para girar el robot a la izquierda."""
     print("Girando a la izquierda...")
-    comunicacionArduino.send_command('a')  # Comando para girar a la izquierda
+    comunicacionBluetooth.send_command('a')  # Comando para girar a la izquierda
 
 def turn_right():
     """Envía el comando para girar el robot a la derecha."""
     print("Girando a la derecha...")
-    comunicacionArduino.send_command('d')  # Comando para girar a la derecha
+    comunicacionBluetooth.send_command('d')  # Comando para girar a la derecha
 
 # ==============================
 # Funciones de Lógica para el Movimiento
@@ -375,8 +376,8 @@ if __name__ == "__main__":
     input_thread.start()
 
     # Iniciar el hilo de lectura de respuestas
-    response_display_thread = threading.Thread(target=serial_response_display_thread, daemon=True)
-    response_display_thread.start()
+    #response_display_thread = threading.Thread(target=serial_response_display_thread, daemon=True)
+    #response_display_thread.start()
 
     # Abrir la fuente de video según la configuración
     if SOURCE_URL:
@@ -444,7 +445,7 @@ if __name__ == "__main__":
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("Presionaste 'q'. Cerrando conexión y terminando programa...")
                 running = False
-                comunicacionArduino.send_command('q')  # Enviar comando de cierre al Arduino
+                comunicacionBluetooth.send_command('q')  # Enviar comando de cierre al Arduino
                 break
 
     # Libera recursos
@@ -452,4 +453,4 @@ if __name__ == "__main__":
     cv2.destroyAllWindows()
 
     # Cerrar la conexión serial si está abierta
-    comunicacionArduino.close_connection()
+    #comunicacionArduino.close_connection()

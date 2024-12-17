@@ -1,5 +1,3 @@
-# analisisMapa_refactorizado_completo.py
-
 import cv2
 import numpy as np
 import random
@@ -8,9 +6,10 @@ import queue
 import math
 import time
 import logging
-import comunicacionArduino  # Asegúrate de que el nombre del archivo sea correcto
+import comunicacionArduino
+import comunicacionBluetooth
+from collections import deque
 
-# Configuración de Logging
 logging.basicConfig(
     level=logging.INFO,  # Cambia a DEBUG para más detalles
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -20,11 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==============================
-# Configuración de la Fuente de Video
-# ==============================
-
-SOURCE_URL = True  # True para usar DroidCam, False para cámara local
 URL = "http://192.168.37.118:4747/video"
 CAMERA_INDEX = 0
 
@@ -77,97 +71,186 @@ class FrameGrabber(threading.Thread):
 # Clase para Controlar el Estado del Robot
 # ==============================
 
+
 class RobotController:
     def __init__(self, maze, qr_detector):
         self.maze = maze
         self.qr_detector = qr_detector
+        self.rows = len(maze)
+        self.cols = len(maze[0])
+        
+        # Información de posición y navegación
         self.current_row = None
         self.current_col = None
         self.current_angle = None
-        self.orientation_aligned = False
-        self.movement_started = False
-        self.target_row = 0
+        self.target_row = 0  # Origen siempre será 0,0
         self.target_col = 0
-        self.margen = 30  # Grados de tolerancia para la alineación
+        
+        # Estado de navegación
+        self.path = []  # Camino calculado
+        self.intentos_alineacion = 0
+        self.movimiento_en_curso = False
+
+    def calcular_camino_optimo(self):
+        """
+        Calcula el camino más corto al origen usando BFS
+        """
+        if self.current_row is None or self.current_col is None:
+            logging.error("Posición actual no definida")
+            return []
+
+        inicio = (self.current_row, self.current_col)
+        fin = (self.target_row, self.target_col)
+        
+        # Movimientos posibles: arriba, derecha, abajo, izquierda
+        direcciones = [(-1, 0), (0, 1), (1, 0), (0, -1)]
+        
+        # Cola para BFS
+        cola = deque([(inicio, [])])
+        visitados = set([inicio])
+
+        while cola:
+            (x, y), camino = cola.popleft()
+            
+            # Llegamos al destino
+            if (x, y) == fin:
+                return camino + [(x, y)]
+
+            # Explorar direcciones
+            for dx, dy in direcciones:
+                nx, ny = x + dx, y + dy
+                
+                # Verificar límites y que sea un camino válido
+                if (0 <= nx < self.rows and 
+                    0 <= ny < self.cols and 
+                    self.maze[nx][ny] == 0 and 
+                    (nx, ny) not in visitados):
+                    
+                    nueva_ruta = camino + [(x, y)]
+                    cola.append(((nx, ny), nueva_ruta))
+                    visitados.add((nx, ny))
+
+        logging.error("No se encontró camino al destino")
+        return []
+
+    def ajustar_angulo(self, objetivo_angulo):
+        """
+        Ajusta el ángulo del robot para que esté alineado con la dirección de movimiento deseada
+        """
+        margen_tolerancia = 10  # margen de 10 grados
+        if abs(self.current_angle - objetivo_angulo) <= margen_tolerancia:
+            return self.current_angle  # Ya está alineado
+
+        # Ajuste del ángulo hacia el objetivo
+        if self.current_angle < objetivo_angulo:
+            turn_right()  # Girar a la derecha
+        else:
+            turn_left()  # Girar a la izquierda
+        
+        # Actualizamos el ángulo después de girar
+        self.current_angle = (self.current_angle + 90) % 360  # Simulando un giro
+
+        return self.current_angle
+
+    def verificar_posicion(self):
+        """
+        Verifica si el robot ha llegado a la casilla objetivo
+        """
+        # Simulamos la verificación de la posición con la cámara
+        qr_data = self.qr_detector.detect_qr()
+        
+        if qr_data:
+            self.update_position_and_angle(qr_data)
+
+        # Comprobar si ha llegado a la casilla de destino
+        if self.current_row == self.target_row and self.current_col == self.target_col:
+            return True
+        return False
+
+    def mover_hacia_objetivo(self):
+        """
+        Mueve el robot hacia el objetivo paso a paso
+        """
+        while not self.verificar_posicion():
+            direccion = self.decidir_movimiento()
+            if direccion == "OBJETIVO_ALCANZADO":
+                logging.info("Objetivo alcanzado.")
+                break
+
+            logging.info(f"Moviendo hacia: {direccion}")
+            estado = self.ejecutar_movimiento(direccion)
+
+            if estado == "CONTINUAR":
+                continue
+            elif estado == "TERMINADO":
+                logging.info("Movimiento completado.")
+                break
+
+            # Pausa para simular movimiento
+            time.sleep(0.5)
+
+    def decidir_movimiento(self):
+        """
+        Decide el siguiente movimiento basado en el camino calculado
+        """
+        # Si no hay camino, calcularlo
+        if not self.path:
+            self.path = self.calcular_camino_optimo()
+            
+            # Si no se encontró camino o ya estamos en el origen
+            if not self.path:
+                return "OBJETIVO_ALCANZADO"
+
+        # Obtener el siguiente paso
+        next_pos = self.path[0]
+        dx = next_pos[0] - self.current_row
+        dy = next_pos[1] - self.current_col
+
+        # Determinar dirección de movimiento
+        if dx == -1:
+            return "ARRIBA"
+        elif dx == 1:
+            return "ABAJO"
+        elif dy == -1:
+            return "IZQUIERDA"
+        elif dy == 1:
+            return "DERECHA"
+
+        return "OBJETIVO_ALCANZADO"
+
+    def ejecutar_movimiento(self, direccion):
+        """
+        Ejecuta el movimiento y actualiza el camino
+        """
+        if direccion == "ARRIBA":
+            self.ajustar_angulo(90)  # Ajuste de ángulo hacia arriba
+            move_forward()  # Mover hacia arriba
+        elif direccion == "ABAJO":
+            self.ajustar_angulo(270)  # Ajuste de ángulo hacia abajo
+            move_forward()
+        elif direccion == "IZQUIERDA":
+            self.ajustar_angulo(180)  # Ajuste de ángulo hacia izquierda
+            move_forward()
+        elif direccion == "DERECHA":
+            self.ajustar_angulo(0)  # Ajuste de ángulo hacia derecha
+            move_forward()
+        
+        # Eliminar el primer paso del camino
+        if self.path:
+            self.path.pop(0)
+
+        return "CONTINUAR" if self.path else "TERMINADO"
 
     def update_position_and_angle(self, qr_data):
         """
-        Actualiza la posición y ángulo actual del robot basado en los datos del QR.
+        Actualiza la posición y ángulo del robot
         """
         self.current_row = qr_data['row']
         self.current_col = qr_data['col']
         self.current_angle = qr_data['angle']
-        logger.info(f"Posición actual detectada: fila {self.current_row}, columna {self.current_col}")
-        logger.info(f"Ángulo actual detectado: {self.current_angle:.2f}°")
-
-    def needs_alignment(self):
-        """
-        Determina si el robot necesita alinear su orientación.
-        """
-        if self.current_angle is None:
-            return False
-        # Definimos un margen de tolerancia (por ejemplo 5 grados)
-        margen = 5
-        # Verificamos si el ángulo está fuera del rango de [90 - margen, 90 + margen]
-        return not (90 - margen <= self.current_angle <= 90 + margen)
-
-    def align_orientation(self):
-        """
-        Alinea la orientación del robot hacia 90 grados.
-        """
-        logger.info("Alineando a la derecha...")
-        for _ in range(10):
-            turn_right()
-        time.sleep(0.5)  # Espera a que el robot gire
-        self.orientation_aligned = True  # Asume que se ha alineado correctamente
-
-    def move_forward_until_next_cell(self):
-        """
-        Mueve el robot hacia adelante hasta que detecta que ha pasado a la siguiente celda.
-        """
-        logger.info("Moviéndose hacia adelante...")
-        move_forward()
-        time.sleep(0.5)  # Espera a que el robot se mueva
-        # La detección de la nueva celda se maneja en el bucle principal
-
-    def decide_next_move(self):
-        """
-        Decide la siguiente acción basada en la posición actual y el objetivo.
-        """
-        if self.current_row == self.target_row and self.current_col == self.target_col:
-            logger.info("Robot ha llegado a la posición objetivo (0,0).")
-            return "DONE"
-
-        # Decidir si mover hacia arriba o hacia la izquierda
-        if self.current_row > self.target_row:
-            desired_direction = "UP"
-        elif self.current_col > self.target_col:
-            desired_direction = "LEFT"
-        else:
-            desired_direction = "DONE"
-
-        return desired_direction
-
-    def execute_move(self, direction):
-        """
-        Ejecuta el movimiento basado en la dirección deseada.
-        """
-        if direction == "UP":
-            logger.info("Preparándose para moverse hacia arriba.")
-            if not self.needs_alignment():
-                self.move_forward_until_next_cell()
-            else:
-                self.align_orientation()
-        elif direction == "LEFT":
-            logger.info("Preparándose para moverse hacia la izquierda.")
-            if not self.needs_alignment():
-                self.move_forward_until_next_cell()
-            else:
-                self.align_orientation()
-        elif direction == "DONE":
-            logger.info("Movimiento completado.")
-            return "DONE"
-        return "CONTINUE"
+        
+        logging.info(f"Posición actual: fila {self.current_row}, columna {self.current_col}")
+        logging.info(f"Ángulo actual: {self.current_angle:.2f}°")
 
 # ==============================
 # Funciones de Generación y Dibujo del Laberinto
@@ -356,16 +439,22 @@ def highlight_start_end(frame, rows, cols):
 # ==============================
 
 def move_forward():
-    comunicacionArduino.send_command('w')
+    for i in range(0,20):
+        comunicacionBluetooth.send_command('w')
 
 def move_back():
-    comunicacionArduino.send_command('s')
+    for i in range(0,20):
+        comunicacionBluetooth.send_command('s')
 
 def turn_left():
-    comunicacionArduino.send_command('a')
+    for i in range(0, 10):
+        comunicacionBluetooth.send_command('a')  # Envía el comando
+        #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
 
 def turn_right():
-    comunicacionArduino.send_command('d')
+    for i in range(0, 10):
+        comunicacionBluetooth.send_command('d')  # Envía el comando
+        #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
 
 # ==============================
 # Función Principal
@@ -375,12 +464,8 @@ def main():
     global running
 
     # Abrir la fuente de video según la configuración
-    if SOURCE_URL:
-        cap = cv2.VideoCapture(URL)
-        logger.info(f"Usando la URL de DroidCam: {URL}")
-    else:
-        cap = cv2.VideoCapture(CAMERA_INDEX)
-        logger.info(f"Usando la cámara incorporada del computador (Índice: {CAMERA_INDEX})")
+    cap = cv2.VideoCapture(URL)
+    logger.info(f"Usando la URL de DroidCam: {URL}")
 
     # Establecer una resolución más baja para mejorar el rendimiento
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
@@ -413,17 +498,11 @@ def main():
     frame_grabber.start()
 
     try:
-        contador=0
         while running:
             if not frame_queue.empty():
                 frame = frame_queue.get()
             else:
                 continue
-
-            # Obtener valores de las trackbars
-            threshold1 = cv2.getTrackbarPos('Canny Th1', 'Ajustes')
-            threshold2 = cv2.getTrackbarPos('Canny Th2', 'Ajustes')
-            dilatacion = cv2.getTrackbarPos('Dilatacion', 'Ajustes')
 
             # Procesar el frame
             detected_qrs, frame_with_shapes = detect_qr_in_image(frame, rows, cols, qr_detector)
@@ -434,38 +513,30 @@ def main():
             # Mostrar el frame con los ajustes
             cv2.imshow('Cuadrícula con análisis', frame_highlighted)
 
-            if contador % 50 == 0:
+            # Procesar los QR detectados
+            for qr in detected_qrs:
+                logger.debug(qr)
+                
+                # Actualizar posición y ángulo del robot
+                robot.update_position_and_angle(qr)
 
-                # Procesar los QR detectados
-                for qr in detected_qrs:
-                    logger.debug(qr)
-                    if robot.current_row is None or robot.current_col is None:
-                        # Establecer la posición inicial basada en el QR detectado
-                        robot.update_position_and_angle(qr)
-                    else:
-                        # Actualizar posición y ángulo
-                        robot.update_position_and_angle(qr)
-
-                    # Decidir el siguiente movimiento
-                    next_move = robot.decide_next_move()
-                    if next_move == "DONE":
-                        logger.info("Robot ha alcanzado el objetivo (0,0).")
+                # Decidir siguiente movimiento
+                direccion = robot.decidir_movimiento()
+                
+                if direccion:
+                    resultado = robot.ejecutar_movimiento(direccion)
+                    
+                    if resultado == "TERMINADO":
+                        logger.info("Robot ha alcanzado la posición inicial (0,0).")
                         running = False
-                        comunicacionArduino.send_command('q')
+                        comunicacionBluetooth.send_command('q')
                         break
-                    elif not robot.orientation_aligned:
-                        if robot.needs_alignment():
-                            robot.align_orientation()
-                    elif not robot.movement_started:
-                        robot.execute_move(next_move)
-            # Incrementar el contador
-            contador += 1
 
             # Presiona 'q' en la ventana de video para salir
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 logger.info("Presionaste 'q'. Cerrando conexión y terminando programa...")
                 running = False
-                comunicacionArduino.send_command('q')
+                comunicacionBluetooth.send_command('q')
                 break
 
     except KeyboardInterrupt:
@@ -479,9 +550,6 @@ def main():
         # Libera recursos
         cap.release()
         cv2.destroyAllWindows()
-
-        # Cerrar la conexión serial si está abierta
-        comunicacionArduino.close_connection()
 
 if __name__ == "__main__":
     main()
