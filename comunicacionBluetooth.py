@@ -36,9 +36,7 @@ def send_command(message):
         time.sleep(0.1)  # Pausa breve para evitar congestión
     except Exception as e:
         print(f"Error al enviar datos: {e}")
-TARGET_MAC = "00:1B:10:21:2C:34"  # Reemplaza con la dirección MAC de tu dispositivo
+TARGET_MAC = "00:1B:10:21:2D:C0"  # Reemplaza con la dirección MAC de tu dispositivo
 
 # Establecer conexión
 bluetooth_socket = bluetooth_connect(TARGET_MAC)
-for i in range(0,10):
-    send_command("w")
