@@ -7,7 +7,7 @@ import threading
 app = Flask(__name__)
 
 # Inicializar variables globales para la cámara y la última imagen capturada
-camera = cv2.VideoCapture("http://192.168.104.25:4747/video")  # Abrir la cámara
+camera = cv2.VideoCapture("http://192.168.37.118:4747/video")  # Abrir la cámara
 #camera = cv2.VideoCapture(0)
 latest_frame = None
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
