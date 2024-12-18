@@ -6,7 +6,7 @@ import queue
 import math
 import time
 import logging
-import comunicacionArduino
+import descartables.comunicacionArduino as comunicacionArduino
 import comunicacionBluetooth
 from collections import deque
 
@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-URL = "http://192.168.37.118:4747/video"
+URL = "http://10.144.145.9:4747/video"
 CAMERA_INDEX = 0
 
 # Resolución reducida para mejorar el rendimiento
@@ -93,63 +93,52 @@ class RobotController:
 
     def calcular_camino_optimo(self):
         """
-        Calcula el camino más corto al origen usando BFS
+        Calcula el camino más corto al origen (0, 0) usando BFS, ignorando obstáculos.
         """
         if self.current_row is None or self.current_col is None:
             logging.error("Posición actual no definida")
             return []
 
         inicio = (self.current_row, self.current_col)
-        fin = (self.target_row, self.target_col)
-        
-        # Movimientos posibles: arriba, derecha, abajo, izquierda
-        direcciones = [(-1, 0), (0, 1), (1, 0), (0, -1)]
-        
-        # Cola para BFS
-        cola = deque([(inicio, [])])
-        visitados = set([inicio])
+        objetivo = (self.target_row, self.target_col)
 
-        while cola:
-            (x, y), camino = cola.popleft()
-            
-            # Llegamos al destino
-            if (x, y) == fin:
-                return camino + [(x, y)]
+        # BFS para encontrar el camino más corto
+        queue = deque([(inicio, [])])  # Cola con posiciones y el camino hasta esa posición
+        visited = set([inicio])  # Conjunto de posiciones visitadas
 
-            # Explorar direcciones
-            for dx, dy in direcciones:
-                nx, ny = x + dx, y + dy
-                
-                # Verificar límites y que sea un camino válido
-                if (0 <= nx < self.rows and 
-                    0 <= ny < self.cols and 
-                    self.maze[nx][ny] == 0 and 
-                    (nx, ny) not in visitados):
-                    
-                    nueva_ruta = camino + [(x, y)]
-                    cola.append(((nx, ny), nueva_ruta))
-                    visitados.add((nx, ny))
+        while queue:
+            (row, col), path = queue.popleft()
 
-        logging.error("No se encontró camino al destino")
+            # Si hemos llegado al objetivo, devolvemos el camino
+            if (row, col) == objetivo:
+                self.path = path + [(row, col)]
+                return self.path
+
+            # Definir los movimientos posibles (arriba, abajo, izquierda, derecha)
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                new_row, new_col = row + dr, col + dc
+
+                # Comprobar si la nueva posición está dentro de los límites
+                if 0 <= new_row < self.rows and 0 <= new_col < self.cols:
+                    if (new_row, new_col) not in visited:  # Sin importar si es obstáculo o no
+                        visited.add((new_row, new_col))
+                        queue.append(((new_row, new_col), path + [(row, col)]))
+
+        # Si no se encontró un camino, devolver una lista vacía
+        logging.error("No se encontró un camino al objetivo")
         return []
 
     def ajustar_angulo(self, objetivo_angulo):
-        """
-        Ajusta el ángulo del robot para que esté alineado con la dirección de movimiento deseada
-        """
-        margen_tolerancia = 10  # margen de 10 grados
+        margen_tolerancia = 10
         if abs(self.current_angle - objetivo_angulo) <= margen_tolerancia:
-            return self.current_angle  # Ya está alineado
+            return self.current_angle
 
-        # Ajuste del ángulo hacia el objetivo
         if self.current_angle < objetivo_angulo:
-            turn_right()  # Girar a la derecha
+            turn_right()
         else:
-            turn_left()  # Girar a la izquierda
-        
-        # Actualizamos el ángulo después de girar
-        self.current_angle = (self.current_angle + 90) % 360  # Simulando un giro
+            turn_left()
 
+        self.current_angle = (self.current_angle + 90) % 360
         return self.current_angle
 
     def verificar_posicion(self):
@@ -232,7 +221,7 @@ class RobotController:
             self.ajustar_angulo(180)  # Ajuste de ángulo hacia izquierda
             move_forward()
         elif direccion == "DERECHA":
-            self.ajustar_angulo(0)  # Ajuste de ángulo hacia derecha
+            self.ajustar_angulo(350)  # Ajuste de ángulo hacia derecha
             move_forward()
         
         # Eliminar el primer paso del camino
@@ -251,6 +240,61 @@ class RobotController:
         
         logging.info(f"Posición actual: fila {self.current_row}, columna {self.current_col}")
         logging.info(f"Ángulo actual: {self.current_angle:.2f}°")
+    
+    def calcular_recorrido_completo(self):
+        """
+        Calcula un recorrido por todo el mapa en forma de zigzag.
+        """
+        self.path = []  # Limpiamos cualquier camino anterior
+        
+        for row in range(self.rows):  # Iterar por filas
+            if row % 2 == 0:  
+                # Si la fila es par, recorremos hacia la derecha
+                for col in range(self.cols):
+                    self.path.append((row, col))
+            else:
+                # Si la fila es impar, recorremos hacia la izquierda
+                for col in reversed(range(self.cols)):
+                    self.path.append((row, col))
+                    
+        logging.info("Se ha calculado el recorrido completo del mapa.")
+        return self.path
+    
+    def mover_recorrido_completo(self):
+        """
+        Mueve el robot para recorrer todo el mapa en zigzag.
+        """
+        self.path = self.calcular_recorrido_completo()
+        
+        while self.path:
+            next_pos = self.path[0]  # Próxima posición objetivo
+            target_row, target_col = next_pos
+
+            # Determinar dirección de movimiento
+            dx = target_row - self.current_row
+            dy = target_col - self.current_col
+            
+            # Decidir y ejecutar movimiento
+            if dx == -1:
+                direccion = "ARRIBA"
+            elif dx == 1:
+                direccion = "ABAJO"
+            elif dy == -1:
+                direccion = "IZQUIERDA"
+            elif dy == 1:
+                direccion = "DERECHA"
+            else:
+                direccion = None  # Ya está en la posición objetivo
+
+            if direccion:
+                logging.info(f"Moviendo hacia {direccion}")
+                self.ejecutar_movimiento(direccion)
+            else:
+                # Actualizar la posición al llegar a la celda
+                self.path.pop(0)
+                self.verificar_posicion()
+            
+            time.sleep(0.5)  # Simula tiempo de movimiento
 
 # ==============================
 # Funciones de Generación y Dibujo del Laberinto
@@ -447,12 +491,12 @@ def move_back():
         comunicacionBluetooth.send_command('s')
 
 def turn_left():
-    for i in range(0, 10):
+    for i in range(0, 20):
         comunicacionBluetooth.send_command('a')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
 
 def turn_right():
-    for i in range(0, 10):
+    for i in range(0, 20):
         comunicacionBluetooth.send_command('d')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
 

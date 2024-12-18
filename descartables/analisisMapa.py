@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import random
 import threading
-import comunicacionArduino  # Asegúrate de que el nombre del archivo sea correcto
+import descartables.comunicacionArduino as comunicacionArduino  # Asegúrate de que el nombre del archivo sea correcto
 import queue
 import math
 import time
