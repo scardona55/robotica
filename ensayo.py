@@ -11,7 +11,7 @@ import comunicacionBluetooth
 from collections import deque
 
 logging.basicConfig(
-    level=logging.INFO,  # Cambia a DEBUG para más detalles
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler()
@@ -19,33 +19,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-URL = "http://10.144.145.9:4747/video"
-CAMERA_INDEX = 0
+URL = "http://192.168.37.118:4747/video"
+#CAMERA_INDEX = 0
 
 # Resolución reducida para mejorar el rendimiento
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-
 # ==============================
-# Parámetros de la Cuadrícula y Canny
-# ==============================
+# Parámetros de la Cuadrícula 
 
 rows = 4
 cols = 4
 thickness = 1
-
 canny_threshold1 = 50
 canny_threshold2 = 150
 
 # ==============================
 # Control del Programa
-# ==============================
 
 running = True
 
 # ==============================
 # Clase para Capturar Frames
-# ==============================
 
 class FrameGrabber(threading.Thread):
     def __init__(self, cap, frame_queue):
@@ -69,8 +64,6 @@ class FrameGrabber(threading.Thread):
 
 # ==============================
 # Clase para Controlar el Estado del Robot
-# ==============================
-
 
 class RobotController:
     def __init__(self, maze, qr_detector):
@@ -83,18 +76,15 @@ class RobotController:
         self.current_row = None
         self.current_col = None
         self.current_angle = None
-        self.target_row = 0  # Origen siempre será 0,0
+        self.target_row = 0 
         self.target_col = 0
         
         # Estado de navegación
-        self.path = []  # Camino calculado
+        self.path = []  
         self.intentos_alineacion = 0
         self.movimiento_en_curso = False
 
     def calcular_camino_optimo(self):
-        """
-        Calcula el camino más corto al origen (0, 0) usando BFS, ignorando obstáculos.
-        """
         if self.current_row is None or self.current_col is None:
             logging.error("Posición actual no definida")
             return []
@@ -102,14 +92,12 @@ class RobotController:
         inicio = (self.current_row, self.current_col)
         objetivo = (self.target_row, self.target_col)
 
-        # BFS para encontrar el camino más corto
-        queue = deque([(inicio, [])])  # Cola con posiciones y el camino hasta esa posición
-        visited = set([inicio])  # Conjunto de posiciones visitadas
+        queue = deque([(inicio, [])])
+        visited = set([inicio])
 
         while queue:
             (row, col), path = queue.popleft()
 
-            # Si hemos llegado al objetivo, devolvemos el camino
             if (row, col) == objetivo:
                 self.path = path + [(row, col)]
                 return self.path
@@ -120,7 +108,7 @@ class RobotController:
 
                 # Comprobar si la nueva posición está dentro de los límites
                 if 0 <= new_row < self.rows and 0 <= new_col < self.cols:
-                    if (new_row, new_col) not in visited:  # Sin importar si es obstáculo o no
+                    if (new_row, new_col) not in visited:
                         visited.add((new_row, new_col))
                         queue.append(((new_row, new_col), path + [(row, col)]))
 
@@ -129,32 +117,47 @@ class RobotController:
         return []
 
     def ajustar_angulo(self, objetivo_angulo):
-        margen_tolerancia = 10
-        if abs(self.current_angle - objetivo_angulo) <= margen_tolerancia:
+        margen_tolerancia = 20
+        diff = (objetivo_angulo - self.current_angle + 360) % 360
+
+        # Verificar si el ángulo ya está alineado
+        if diff <= margen_tolerancia or diff >= 360 - margen_tolerancia:
             return self.current_angle
 
-        if self.current_angle < objetivo_angulo:
-            turn_right()
+        # Determinar la dirección óptima del giro
+        if diff > 180:
+            turn_left()  # Giro más corto hacia la izquierda
+            self.current_angle = (self.current_angle - 90) % 360
         else:
-            turn_left()
+            turn_right()  # Giro más corto hacia la derecha
+            self.current_angle = (self.current_angle + 90) % 360
 
-        self.current_angle = (self.current_angle + 90) % 360
         return self.current_angle
 
-    def verificar_posicion(self):
+
+    def verificar_posicion(self, image):
         """
-        Verifica si el robot ha llegado a la casilla objetivo
+        Verifica si el robot ha llegado a la casilla objetivo usando detect_qr_in_image.
         """
-        # Simulamos la verificación de la posición con la cámara
-        qr_data = self.qr_detector.detect_qr()
+        # Detectar QR en la imagen capturada
+        detected_qrs, _ = detect_qr_in_image(image, self.rows, self.cols, self.qr_detector)
         
-        if qr_data:
-            self.update_position_and_angle(qr_data)
+        # Si no se detecta ningún QR, no actualizar posición
+        if not detected_qrs:
+            logger.warning("No se detectó ningún QR.")
+            return False
+
+        # Actualizar posición y ángulo basados en el primer QR detectado
+        qr_data = detected_qrs[0]  # Asumimos que el primer QR es el relevante
+        self.update_position_and_angle(qr_data)
 
         # Comprobar si ha llegado a la casilla de destino
         if self.current_row == self.target_row and self.current_col == self.target_col:
+            logger.info(f"El robot ha llegado a la posición objetivo: ({self.target_row}, {self.target_col}).")
             return True
+
         return False
+
 
     def mover_hacia_objetivo(self):
         """
@@ -211,20 +214,20 @@ class RobotController:
         """
         Ejecuta el movimiento y actualiza el camino
         """
+        logger.info(f"Ejecutando movimiento hacia: {direccion}")
         if direccion == "ARRIBA":
-            self.ajustar_angulo(90)  # Ajuste de ángulo hacia arriba
-            move_forward()  # Mover hacia arriba
+            self.ajustar_angulo(90)
+            move_forward()
         elif direccion == "ABAJO":
-            self.ajustar_angulo(270)  # Ajuste de ángulo hacia abajo
+            self.ajustar_angulo(270)
             move_forward()
         elif direccion == "IZQUIERDA":
-            self.ajustar_angulo(180)  # Ajuste de ángulo hacia izquierda
+            self.ajustar_angulo(180)
             move_forward()
         elif direccion == "DERECHA":
-            self.ajustar_angulo(350)  # Ajuste de ángulo hacia derecha
+            self.ajustar_angulo(0)
             move_forward()
         
-        # Eliminar el primer paso del camino
         if self.path:
             self.path.pop(0)
 
@@ -483,22 +486,26 @@ def highlight_start_end(frame, rows, cols):
 # ==============================
 
 def move_forward():
-    for i in range(0,20):
+    for i in range(0,10):
         comunicacionBluetooth.send_command('w')
+    print("Siguiente")
 
 def move_back():
-    for i in range(0,20):
+    for i in range(0,10):
         comunicacionBluetooth.send_command('s')
+    print("Siguiente")
 
 def turn_left():
-    for i in range(0, 20):
+    for i in range(0, 40):
         comunicacionBluetooth.send_command('a')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
+    print("Siguiente")
 
 def turn_right():
-    for i in range(0, 20):
+    for i in range(0, 40):
         comunicacionBluetooth.send_command('d')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
+    print("Siguiente")
 
 # ==============================
 # Función Principal
@@ -548,8 +555,13 @@ def main():
             else:
                 continue
 
-            # Procesar el frame
-            detected_qrs, frame_with_shapes = detect_qr_in_image(frame, rows, cols, qr_detector)
+            # Verificar posición basada en el QR detectado
+            if robot.verificar_posicion(frame):
+                logger.info("El robot ha alcanzado la posición objetivo.")
+                break
+
+            # Procesar el frame (solo para visualización)
+            _, frame_with_shapes = detect_qr_in_image(frame, rows, cols, qr_detector)
             frame_with_grid = draw_grid(frame_with_shapes, rows, cols, thickness)
             frame_filled = fill_cells(frame_with_grid, maze)
             frame_highlighted = highlight_start_end(frame_filled, rows, cols)
@@ -557,30 +569,19 @@ def main():
             # Mostrar el frame con los ajustes
             cv2.imshow('Cuadrícula con análisis', frame_highlighted)
 
-            # Procesar los QR detectados
-            for qr in detected_qrs:
-                logger.debug(qr)
-                
-                # Actualizar posición y ángulo del robot
-                robot.update_position_and_angle(qr)
-
-                # Decidir siguiente movimiento
-                direccion = robot.decidir_movimiento()
-                
-                if direccion:
-                    resultado = robot.ejecutar_movimiento(direccion)
-                    
-                    if resultado == "TERMINADO":
-                        logger.info("Robot ha alcanzado la posición inicial (0,0).")
-                        running = False
-                        comunicacionBluetooth.send_command('q')
-                        break
+            # Decidir y ejecutar el siguiente movimiento
+            direccion = robot.decidir_movimiento()
+            if direccion:
+                resultado = robot.ejecutar_movimiento(direccion)
+                if resultado == "TERMINADO":
+                    logger.info("El robot ha alcanzado la posición inicial (0,0).")
+                    running = False
+                    break
 
             # Presiona 'q' en la ventana de video para salir
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 logger.info("Presionaste 'q'. Cerrando conexión y terminando programa...")
                 running = False
-                comunicacionBluetooth.send_command('q')
                 break
 
     except KeyboardInterrupt:
@@ -588,7 +589,7 @@ def main():
 
     finally:
         # Detener el FrameGrabber
-        frame_grabber.stop()
+        #frame_grabber.stop()
         frame_grabber.join()
 
         # Libera recursos

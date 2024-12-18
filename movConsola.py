@@ -19,7 +19,7 @@ import comunicacionBluetooth
 SOURCE_URL = True  # Cambiar a True para DroidCam, False para cámara local
 
 # URL de DroidCam
-URL = "http://10.144.145.9:4747/video"
+URL = "http://192.168.37.118:4747/video"
 
 # Índice de la cámara incorporada (normalmente 0)
 CAMERA_INDEX = 0
