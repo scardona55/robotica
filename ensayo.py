@@ -9,6 +9,7 @@ import logging
 import descartables.comunicacionArduino as comunicacionArduino
 import comunicacionBluetooth
 from collections import deque
+from gridworld_utils import *
 
 logging.basicConfig(
     level=logging.INFO,  # Cambia a DEBUG para más detalles
@@ -500,6 +501,104 @@ def turn_right():
         comunicacionBluetooth.send_command('d')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
 
+def obtener_mapa_descriptivo(maze):
+    """
+    Genera una matriz descriptiva del estado del mapa.
+    'S' representa el inicio.
+    'E' representa la salida.
+    'O' representa obstáculos.
+    'P' representa pasillos.
+    """
+    rows = len(maze)
+    cols = len(maze[0])
+    mapa_descriptivo = []
+
+    for i in range(rows):
+        fila = []
+        for j in range(cols):
+            if i == 0 and j == 0:  # Inicio
+                fila.append('S')
+            elif i == rows - 1 and j == cols - 1:  # Salida
+                fila.append('E')
+            elif maze[i][j] == 1:  # Obstáculo
+                fila.append('O')
+            else:  # Pasillo
+                fila.append('P')
+        mapa_descriptivo.append(fila)
+
+    return mapa_descriptivo
+
+def obtener_salida(mapa):
+    """
+    Encuentra la posición de la salida 'E' en el mapa.
+    
+    Parámetros:
+    mapa (list of list): Matriz representando el mapa.
+    
+    Retorna:
+    tuple: Coordenadas de la salida (fila, columna).
+    """
+    for i, fila in enumerate(mapa):
+        for j, celda in enumerate(fila):
+            if celda == 'E':
+                return (i, j)
+    return None  # Devuelve None si no encuentra la salida
+
+def obtener_obstaculos(mapa):
+    """
+    Encuentra las posiciones de los obstáculos 'O' en el mapa.
+    
+    Parámetros:
+    mapa (list of list): Matriz representando el mapa.
+    
+    Retorna:
+    list: Lista de coordenadas de los obstáculos [(fila1, columna1), (fila2, columna2), ...].
+    """
+    obstaculos = []
+    for i, fila in enumerate(mapa):
+        for j, celda in enumerate(fila):
+            if celda == 'O':
+                obstaculos.append((i, j))
+    return obstaculos
+
+def ejecutar_politica(politica, posicion_actual):
+    """
+    Ejecuta la acción correspondiente según la política y la posición actual.
+
+    Parámetros:
+    politica (dict): Diccionario con la política, donde las claves son las posiciones
+                     y los valores son las acciones ('up', 'down', 'left', 'right').
+    posicion_actual (tuple): Tupla que indica la posición actual del robot (fila, columna).
+
+    Retorna:
+    None: La función llama a las acciones correspondientes de movimiento.
+    """
+    # Obtener la acción asociada a la posición actual
+    posicion_str = str(posicion_actual)  # Convertir la posición a string para buscar en la política
+    accion = politica.get(posicion_str)
+
+    if accion is None:
+        print(f"No hay acción definida para la posición {posicion_actual}.")
+        return
+
+    # Ejecutar la acción según la política
+    if accion == 'up':
+        print(f"Ejecutando acción: {accion} -> move_forward()")
+        move_forward()
+    elif accion == 'down':
+        print(f"Ejecutando acción: {accion} -> move_back()")
+        move_back()
+    elif accion == 'left':
+        print(f"Ejecutando acción: {accion} -> turn_left()")
+        turn_left()
+    elif accion == 'right':
+        print(f"Ejecutando acción: {accion} -> turn_right()")
+        turn_right()
+    else:
+        print(f"Acción desconocida: {accion}")
+
+
+
 # ==============================
 # Función Principal
 # ==============================
@@ -541,6 +640,32 @@ def main():
     frame_grabber = FrameGrabber(cap, frame_queue)
     frame_grabber.start()
 
+    maze = maze_generate(rows, cols)  # Generar el mapa base
+    mapa_descriptivo = obtener_mapa_descriptivo(maze)
+    salida = obtener_salida(mapa_descriptivo)
+    obstaculos = obtener_obstaculos(mapa_descriptivo)
+    height = len(mapa_descriptivo)  # Número de filas
+    width = len(mapa_descriptivo[0]) if mapa_descriptivo else 0  # Número de columnas (suponiendo que todas las filas tienen el mismo ancho)
+
+    # Inicializar entorno
+    env = initialize_environment(width,height,salida,obstaculos)
+
+    # Parámetros de Q-learning
+    alpha = 0.1
+    gamma = 0.99
+    epsilon = 1.0
+    epsilon_min = 0.1
+    epsilon_decay = 0.995
+    episodes = 1000
+
+    # Inicializar tabla Q
+    Q = initialize_q_table(env.width, env.height, env.obstacles, env.actions)
+
+    # Entrenar al agente
+    Q = train_agent(env, Q, episodes, alpha, gamma, epsilon, epsilon_min, epsilon_decay)
+
+    # Extraer política
+    policy = extract_policy(Q)
     try:
         while running:
             if not frame_queue.empty():
@@ -572,8 +697,11 @@ def main():
                     
                     if resultado == "TERMINADO":
                         logger.info("Robot ha alcanzado la posición inicial (0,0).")
-                        running = False
-                        comunicacionBluetooth.send_command('q')
+                        # Uso:
+                        posicion_actual=(0,0) #coloque la posición actual no sé a mí me quedó grande
+                        # Ejecutar acción según la política
+                        ejecutar_politica(policy, posicion_actual)
+            
                         break
 
             # Presiona 'q' en la ventana de video para salir
