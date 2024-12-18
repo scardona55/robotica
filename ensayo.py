@@ -9,6 +9,7 @@ import logging
 import descartables.comunicacionArduino as comunicacionArduino
 import comunicacionBluetooth
 from collections import deque
+from gridworld_utils import *
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +32,7 @@ FRAME_HEIGHT = 480
 rows = 4
 cols = 4
 thickness = 1
+
 canny_threshold1 = 50
 canny_threshold2 = 150
 
@@ -497,13 +499,13 @@ def move_back():
 
 def turn_left():
     for i in range(0, 40):
-        comunicacionBluetooth.send_command('a')  # Envía el comando
+        comunicacionBluetooth.send_command('d')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
     print("Siguiente")
 
 def turn_right():
     for i in range(0, 40):
-        comunicacionBluetooth.send_command('d')  # Envía el comando
+        comunicacionBluetooth.send_command('a')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
     print("Siguiente")
 
