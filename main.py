@@ -5,18 +5,20 @@ import math
 import time
 import logging
 import json
-import comunicacionBluetooth  
+import requests  # Importamos requests para las solicitudes HTTP
+import comunicacionBluetooth  # Asegúrate de que este módulo esté correctamente implementado
 from collections import deque
 from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos
 import qlearn  # Importamos nuestro módulo de Q-learning
-import sarsa
-import argparse
+import sarsa  # Importamos nuestro módulo de SARSA
+import argparse  # Para manejar argumentos de línea de comandos
 
 # ==============================
 # Configuración del Logging
+# ==============================
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Cambiado a DEBUG para obtener más información
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler()
@@ -26,26 +28,67 @@ logger = logging.getLogger(__name__)
 
 # ==============================
 # Parámetros de la Cámara y Resolución
+# ==============================
 
-URL = "http://192.168.37.118:4747/video" 
+URL = "http://192.168.37.118:4747/video"  # Cambia esta URL según tu configuración
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # ==============================
 # Parámetros de la Cuadrícula
+# ==============================
 
-ROWS = 5
-COLS = 5
+ROWS = 4  # Se actualizarán dinámicamente
+COLS = 4  # Se actualizarán dinámicamente
 THICKNESS = 1
 
 CANNY_THRESHOLD1 = 50
 CANNY_THRESHOLD2 = 150
 
 # Intervalo para enviar comandos al Arduino (en frames)
-COMMAND_INTERVAL = 72
+COMMAND_INTERVAL = 48
+
+# ==============================
+# Función para Cargar el Mapa desde el Endpoint
+# ==============================
+
+def fetch_maze_data():
+    """
+    Realiza una solicitud GET al endpoint para obtener el mapa del laberinto.
+    
+    Retorna:
+        list of list of int: Mapa del laberinto donde 0 es pasillo y 1 es obstáculo.
+        None: Si ocurre un error al obtener o procesar el mapa.
+    """
+    url = "https://77c1-2803-1800-4202-201-d89c-e9f9-d163-b844.ngrok-free.app/maze"
+    logger.debug(f"Intentando obtener el mapa desde el endpoint: {url}")
+    try:
+        response = requests.get(url, timeout=10)  # Añadido timeout para evitar bloqueos
+        response.raise_for_status()  # Lanza una excepción si hay un error HTTP
+        data = response.json()  # Convierte la respuesta JSON a un diccionario
+        logger.debug(f"Respuesta del endpoint: {data}")
+        
+        # Verificar que el mapa sea una lista de listas y que contenga solo 0 y 1
+        if isinstance(data, list) and all(isinstance(row, list) for row in data):
+            for row in data:
+                if not all(cell in [0, 1] for cell in row):
+                    logger.error("El mapa contiene valores inválidos. Solo se permiten 0 y 1.")
+                    return None
+            logger.info("Mapa cargado correctamente desde el endpoint.")
+            return data
+        else:
+            logger.error("El formato del mapa es inválido. Debe ser una lista de listas.")
+            return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ocurrió un error al obtener el mapa: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Error al decodificar JSON: {e}")
+        return None
 
 # ==============================
 # Clase para Controlar el Estado del Robot
+# ==============================
 
 class RobotController:
     def __init__(self, maze, qr_detector):
@@ -97,7 +140,7 @@ class RobotController:
         logger.error("No se encontró un camino al objetivo")
         return []
 
-    def ajustar_angulo(self, objetivo_angulo):
+    def ajustar_angulo(self, objetivo_angulo, algoritmo):
         margen_tolerancia = 20
         diff = (objetivo_angulo - self.current_angle + 360) % 360
 
@@ -109,13 +152,19 @@ class RobotController:
         # Determinar la dirección óptima del giro
         if diff > 180:
             logger.info("Giro a la izquierda.")
-            qlearn.turn_left()
+            if algoritmo == 'qlearning':
+                qlearn.turn_left()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_left()
             # Esperar a que el giro se complete
             time.sleep(1)  # Ajusta este tiempo según la velocidad de giro de tu robot
             self.current_angle = (self.current_angle - 90) % 360
         else:
             logger.info("Giro a la derecha.")
-            qlearn.turn_right()
+            if algoritmo == 'qlearning':
+                qlearn.turn_right()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_right()
             # Esperar a que el giro se complete
             time.sleep(1)  # Ajusta este tiempo según la velocidad de giro de tu robot
             self.current_angle = (self.current_angle + 90) % 360
@@ -174,23 +223,35 @@ class RobotController:
 
         return "OBJETIVO_ALCANZADO"
 
-    def ejecutar_movimiento(self, direccion):
+    def ejecutar_movimiento(self, direccion, algoritmo):
         """
         Ejecuta el movimiento y actualiza el camino
         """
         logger.info(f"Ejecutando movimiento hacia: {direccion}")
         if direccion == "ARRIBA":
-            self.ajustar_angulo(90)
-            qlearn.move_forward()
+            self.ajustar_angulo(90, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.move_forward()
+            elif algoritmo == 'sarsa':
+                sarsa.move_forward()
         elif direccion == "ABAJO":
-            self.ajustar_angulo(270)
-            qlearn.move_forward()
+            self.ajustar_angulo(270, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.move_forward()
+            elif algoritmo == 'sarsa':
+                sarsa.move_forward()
         elif direccion == "IZQUIERDA":
-            self.ajustar_angulo(180)
-            qlearn.turn_left()
+            self.ajustar_angulo(180, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.turn_left()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_left()
         elif direccion == "DERECHA":
-            self.ajustar_angulo(0)
-            qlearn.turn_right()
+            self.ajustar_angulo(0, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.turn_right()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_right()
         
         if self.path:
             self.path.pop(0)
@@ -210,6 +271,7 @@ class RobotController:
 
 # ==============================
 # Funciones de Generación y Dibujo del Laberinto
+# ==============================
 
 def maze_generate(filas, columnas):
     laberinto = [[1 for _ in range(columnas)] for _ in range(filas)]
@@ -391,6 +453,7 @@ def highlight_start_end(frame, rows, cols):
 
 # ==============================
 # Función Principal
+# ==============================
 
 def main():
     global ROWS, COLS, CANNY_THRESHOLD1, CANNY_THRESHOLD2
@@ -404,23 +467,29 @@ def main():
 
     logger.info(f"Algoritmo seleccionado: {algoritmo.upper()}")
 
-    # Abrir la fuente de video según la configuración
-    cap = cv2.VideoCapture(URL)
-    logger.info(f"Usando la URL de DroidCam: {URL}")
+    # Obtener el mapa desde el endpoint
+    maze = fetch_maze_data()
+    if maze is None:
+        logger.error("No se pudo obtener el mapa desde el endpoint. Se usará un mapa generado aleatoriamente.")
+        maze = maze_generate(ROWS, COLS)
+        logger.info("Mapa generado aleatoriamente.")
+    else:
+        logger.info("Mapa cargado exitosamente desde el endpoint.")
 
-    # Establecer una resolución más baja para mejorar el rendimiento
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    # Actualizar ROWS y COLS según el mapa cargado
+    ROWS = len(maze)
+    COLS = len(maze[0]) if ROWS > 0 else 0
 
-    if not cap.isOpened():
-        logger.error("No se pudo conectar a la cámara seleccionada.")
+    if ROWS == 0 or COLS == 0:
+        logger.error("El mapa cargado está vacío. Terminando el programa.")
         return
 
-    logger.info(f"Conexión exitosa. Analizando video con cuadrícula de {ROWS}x{COLS}...")
-    maze = maze_generate(ROWS, COLS)
-    logger.debug("Mapa generado:")
-    for fila in maze:
-        logger.debug(fila)
+    # Verificar que todas las filas tengan la misma longitud
+    if not all(len(row) == COLS for row in maze):
+        logger.error("El mapa cargado no es rectangular. Todas las filas deben tener la misma longitud.")
+        return
+
+    logger.info(f"Mapa con dimensiones {ROWS}x{COLS} cargado.")
 
     mapa = obtener_mapa_descriptivo(maze)
     salida = obtener_salida(mapa)
@@ -433,6 +502,18 @@ def main():
     cv2.createTrackbar('Dilatacion', 'Ajustes', 2, 15, lambda x: None)
 
     qr_detector = cv2.QRCodeDetector()
+
+    # Crear la fuente de video
+    cap = cv2.VideoCapture(URL)
+    logger.info(f"Usando la URL de DroidCam: {URL}")
+
+    # Establecer una resolución más baja para mejorar el rendimiento
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+    if not cap.isOpened():
+        logger.error("No se pudo conectar a la cámara seleccionada.")
+        return
 
     # Crear el controlador del robot
     robot = RobotController(maze, qr_detector)
@@ -517,7 +598,7 @@ def main():
                     logger.info("El robot no está en la posición inicial. Volviendo a la posición inicial...")
                     direccion = robot.decidir_movimiento()
                     if direccion:
-                        resultado = robot.ejecutar_movimiento(direccion)
+                        resultado = robot.ejecutar_movimiento(direccion, algoritmo)
                         if resultado == "TERMINADO":
                             logger.info("El robot ha alcanzado la posición inicial (0,0).")
 
@@ -529,25 +610,25 @@ def main():
                     logger.info(f"Acción según la política en {estado_actual}: {accion}")
                     # Ejecutar la acción
                     if accion == 'up':
-                        robot.ajustar_angulo(90)
+                        robot.ajustar_angulo(90, algoritmo)
                         if algoritmo == 'qlearning':
                             qlearn.move_forward()
                         elif algoritmo == 'sarsa':
                             sarsa.move_forward()
                     elif accion == 'down':
-                        robot.ajustar_angulo(270)
+                        robot.ajustar_angulo(270, algoritmo)
                         if algoritmo == 'qlearning':
                             qlearn.move_forward()
                         elif algoritmo == 'sarsa':
                             sarsa.move_forward()
                     elif accion == 'left':
-                        robot.ajustar_angulo(180)
+                        robot.ajustar_angulo(180, algoritmo)
                         if algoritmo == 'qlearning':
                             qlearn.turn_left()
                         elif algoritmo == 'sarsa':
                             sarsa.turn_left()
                     elif accion == 'right':
-                        robot.ajustar_angulo(0)
+                        robot.ajustar_angulo(0, algoritmo)
                         if algoritmo == 'qlearning':
                             qlearn.turn_right()
                         elif algoritmo == 'sarsa':
