@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Inicializar variables globales para la cámara y la última imagen capturada
-camera = cv2.VideoCapture("http://192.168.1.5:4747/video")  # Abrir la cámara IP
+camera = cv2.VideoCapture("http://10.144.145.9:4747/video")
 # camera = cv2.VideoCapture(0)  # Alternativa para cámara local
 latest_frame = None
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
