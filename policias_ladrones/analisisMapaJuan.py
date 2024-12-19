@@ -6,6 +6,7 @@ import queue
 import math
 import time
 import logging
+import json  # Para cargar la política
 import descartables.comunicacionArduino as comunicacionArduino
 import comunicacionBluetooth
 from collections import deque
@@ -68,9 +69,10 @@ class FrameGrabber(threading.Thread):
 # Clase para Controlar el Estado del Robot
 
 class RobotController:
-    def __init__(self, maze, qr_detector):
+    def __init__(self, maze, qr_detector, policy):
         self.maze = maze
         self.qr_detector = qr_detector
+        self.policy = policy  # Política cargada
         self.rows = len(maze)
         self.cols = len(maze[0])
         
@@ -86,6 +88,9 @@ class RobotController:
         self.intentos_alineacion = 0
         self.movimiento_en_curso = False
 
+        # Modo de operación
+        self.use_policy = False  # Inicialmente no usa política
+
     def calcular_camino_optimo(self):
         if self.current_row is None or self.current_col is None:
             logging.error("Posición actual no definida")
@@ -94,11 +99,11 @@ class RobotController:
         inicio = (self.current_row, self.current_col)
         objetivo = (self.target_row, self.target_col)
 
-        queue = deque([(inicio, [])])
+        queue_bfs = deque([(inicio, [])])
         visited = set([inicio])
 
-        while queue:
-            (row, col), path = queue.popleft()
+        while queue_bfs:
+            (row, col), path = queue_bfs.popleft()
 
             if (row, col) == objetivo:
                 self.path = path + [(row, col)]
@@ -110,9 +115,9 @@ class RobotController:
 
                 # Comprobar si la nueva posición está dentro de los límites
                 if 0 <= new_row < self.rows and 0 <= new_col < self.cols:
-                    if (new_row, new_col) not in visited:
+                    if (new_row, new_col) not in visited and self.maze[new_row][new_col] == 0:
                         visited.add((new_row, new_col))
-                        queue.append(((new_row, new_col), path + [(row, col)]))
+                        queue_bfs.append(((new_row, new_col), path + [(row, col)]))
 
         # Si no se encontró un camino, devolver una lista vacía
         logging.error("No se encontró un camino al objetivo")
@@ -156,32 +161,39 @@ class RobotController:
         # Comprobar si ha llegado a la casilla de destino
         if self.current_row == self.target_row and self.current_col == self.target_col:
             logger.info(f"El robot ha llegado a la posición objetivo: ({self.target_row}, {self.target_col}).")
+            # Cambiar al modo de usar política
+            self.use_policy = True
             return True
 
         return False
 
 
-    def mover_hacia_objetivo(self):
+    def mover_hacia_objetivo(self, image):
         """
-        Mueve el robot hacia el objetivo paso a paso
+        Mueve el robot hacia el objetivo paso a paso o sigue la política si está en modo policy.
         """
-        while not self.verificar_posicion():
-            direccion = self.decidir_movimiento()
-            if direccion == "OBJETIVO_ALCANZADO":
-                logging.info("Objetivo alcanzado.")
-                break
+        if self.use_policy:
+            # Modo de política
+            self.mover_según_politica()
+        else:
+            # Modo de camino óptimo
+            while not self.verificar_posicion(image):
+                direccion = self.decidir_movimiento()
+                if direccion == "OBJETIVO_ALCANZADO":
+                    logging.info("Objetivo alcanzado.")
+                    break
 
-            logging.info(f"Moviendo hacia: {direccion}")
-            estado = self.ejecutar_movimiento(direccion)
+                logging.info(f"Moviendo hacia: {direccion}")
+                estado = self.ejecutar_movimiento(direccion)
 
-            if estado == "CONTINUAR":
-                continue
-            elif estado == "TERMINADO":
-                logging.info("Movimiento completado.")
-                break
+                if estado == "CONTINUAR":
+                    continue
+                elif estado == "TERMINADO":
+                    logging.info("Movimiento completado.")
+                    break
 
-            # Pausa para simular movimiento
-            time.sleep(0.5)
+                # Pausa para simular movimiento
+                time.sleep(0.5)
 
     def decidir_movimiento(self):
         """
@@ -225,15 +237,53 @@ class RobotController:
             move_forward()
         elif direccion == "IZQUIERDA":
             self.ajustar_angulo(180)
-            move_forward()
+            turn_left()
         elif direccion == "DERECHA":
             self.ajustar_angulo(0)
-            move_forward()
+            turn_right()
         
         if self.path:
             self.path.pop(0)
 
         return "CONTINUAR" if self.path else "TERMINADO"
+
+    def mover_según_politica(self):
+        """
+        Mueve el robot según la política cargada.
+        """
+        current_state = self._get_state_index()
+        if current_state is None:
+            logger.error("Estado actual no definido para la política.")
+            return
+
+        # Obtener la mejor acción de la política
+        best_action = self.policy.get(str(current_state), "OBJETIVO_ALCANZADO")
+
+        if best_action == "ARRIBA":
+            direccion = "ARRIBA"
+        elif best_action == "ABAJO":
+            direccion = "ABAJO"
+        elif best_action == "IZQUIERDA":
+            direccion = "IZQUIERDA"
+        elif best_action == "DERECHA":
+            direccion = "DERECHA"
+        else:
+            direccion = "OBJETIVO_ALCANZADO"
+
+        if direccion != "OBJETIVO_ALCANZADO":
+            logger.info(f"Política: Moviendo hacia {direccion}")
+            self.ejecutar_movimiento(direccion)
+        else:
+            logger.info("Política: No se requiere movimiento.")
+            # Aquí podrías implementar alguna acción específica cuando no se requiere movimiento
+
+    def _get_state_index(self):
+        """
+        Obtiene el índice del estado actual para la política.
+        """
+        if self.current_row is None or self.current_col is None:
+            return None
+        return self.current_row * self.cols + self.current_col
 
     def update_position_and_angle(self, qr_data):
         """
@@ -361,7 +411,7 @@ def detect_qr_in_image(image, rows, cols, qr_detector):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     data, points, _ = qr_detector.detectAndDecode(gray)
 
-    if points is not None:
+    if points is not None and data:
         points = points.reshape((-1, 2)).astype(int)
         for i in range(len(points)):
             cv2.line(image, tuple(points[i]), tuple(points[(i + 1) % len(points)]), (0, 255, 0), 3)
@@ -490,24 +540,24 @@ def highlight_start_end(frame, rows, cols):
 def move_forward():
     for i in range(0,10):
         comunicacionBluetooth.send_command('w')
-    print("Siguiente")
+    print("Movimiento hacia adelante ejecutado.")
 
 def move_back():
     for i in range(0,10):
         comunicacionBluetooth.send_command('s')
-    print("Siguiente")
+    print("Movimiento hacia atrás ejecutado.")
 
 def turn_left():
     for i in range(0, 40):
         comunicacionBluetooth.send_command('d')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
-    print("Siguiente")
+    print("Giro a la izquierda ejecutado.")
 
 def turn_right():
     for i in range(0, 40):
         comunicacionBluetooth.send_command('a')  # Envía el comando
         #time.sleep(0.1)  # Espera 100 ms antes de enviar el siguiente comando
-    print("Siguiente")
+    print("Giro a la derecha ejecutado.")
 
 # ==============================
 # Función Principal
@@ -516,8 +566,32 @@ def turn_right():
 def main():
     global running
 
+    # Cargar la política desde 'policy.json'
+    try:
+        with open('policy.json', 'r', encoding='utf-8') as f:
+            policy_data = json.load(f)
+    except FileNotFoundError:
+        logger.error("El archivo 'policy.json' no se encontró. Asegúrate de generarlo antes de ejecutar el programa.")
+        return
+    except json.JSONDecodeError:
+        logger.error("Error al decodificar 'policy.json'. Asegúrate de que el archivo esté en formato JSON válido.")
+        return
+
+    # Convertir la política a un diccionario para acceso rápido
+    policy_dict = {}
+    for entry in policy_data:
+        if entry['Agent_Type'] == 0:  # Sólo para Policía
+            state = entry['State']
+            best_action = entry['Best_Action']
+            state_index = state[0] * cols + state[1]
+            policy_dict[str(state_index)] = best_action
+
     # Abrir la fuente de video según la configuración
     logger.info(f"Usando la URL de DroidCam: {URL}")
+    cap = cv2.VideoCapture(URL)
+    if not cap.isOpened():
+        logger.error("No se pudo abrir la fuente de video.")
+        return
 
     logger.info(f"Conexión exitosa. Analizando video con cuadrícula de {rows}x{cols}...")
     maze = maze_generate(rows, cols)
@@ -526,7 +600,7 @@ def main():
         logger.debug(fila)
         
     qr_detector = cv2.QRCodeDetector()
-    robot = RobotController(maze, qr_detector)
+    robot = RobotController(maze, qr_detector, policy_dict)
 
     # Iniciar el FrameGrabber
     frame_queue = queue.Queue(maxsize=50)
@@ -542,8 +616,9 @@ def main():
 
             # Verificar posición basada en el QR detectado
             if robot.verificar_posicion(frame):
-                logger.info("El robot ha alcanzado la posición objetivo.")
-                break
+                logger.info("El robot ha alcanzado la posición objetivo. Ahora usará la política para moverse.")
+                # No break aquí para que continúe usando la política
+                # break
 
             # Procesar el frame (solo para visualización)
             _, frame_with_shapes = detect_qr_in_image(frame, rows, cols, qr_detector)
@@ -555,13 +630,7 @@ def main():
             cv2.imshow('Cuadrícula con análisis', frame_highlighted)
 
             # Decidir y ejecutar el siguiente movimiento
-            direccion = robot.decidir_movimiento()
-            if direccion:
-                resultado = robot.ejecutar_movimiento(direccion)
-                if resultado == "TERMINADO":
-                    logger.info("El robot ha alcanzado la posición inicial (0,0).")
-                    running = False
-                    break
+            robot.mover_hacia_objetivo(frame)
 
             # Presiona 'q' en la ventana de video para salir
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -574,7 +643,7 @@ def main():
 
     finally:
         # Detener el FrameGrabber
-        #frame_grabber.stop()
+        frame_grabber.stop()
         frame_grabber.join()
 
         # Libera recursos
