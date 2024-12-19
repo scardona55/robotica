@@ -9,8 +9,8 @@ import time
 import logging
 import json
 from collections import deque
-import comunicacionBluetooth  # Asegúrate de que este módulo esté correctamente implementado
-import qlearn  # Importamos nuestro módulo de Q-learning
+import connectionBluetooth  # Importación corregida
+import qlearn  # Asegúrate de que este módulo esté correctamente implementado
 from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos  # Importación correcta
 
 app = Flask(__name__)
@@ -49,6 +49,12 @@ bandera = 0
 # Diccionario para almacenar controladores de robots
 robot_controllers = {}  # key: marker_id, value: RobotController instance
 
+# Mapeo de marker_id a direcciones MAC
+MARKER_TO_MAC = {
+    8: "00:1B:10:21:2C:1B",  # Reemplaza con la MAC real del robot con marker_id 8
+    9: "XX:XX:XX:XX:XX:XX"   # Reemplaza con la MAC real del robot con marker_id 9
+}
+
 # ==============================
 # Clase RobotController Integrada
 # ==============================
@@ -79,8 +85,17 @@ class RobotController:
         self.intentos_alineacion = 0
         self.movimiento_en_curso = False
 
-        # Comunicación Bluetooth (asegúrate de que este método esté implementado correctamente)
-        self.bt_connection = comunicacionBluetooth.connect_robot(marker_id)
+        # Comunicación Bluetooth
+        mac_address = MARKER_TO_MAC.get(marker_id)
+        if mac_address:
+            self.bt_connection = connectionBluetooth.bluetooth_connect(mac_address)
+            if self.bt_connection:
+                logger.info(f"Robot {marker_id}: Conexión Bluetooth establecida con {mac_address}")
+            else:
+                logger.error(f"Robot {marker_id}: No se pudo conectar a {mac_address}")
+        else:
+            logger.error(f"Robot {marker_id}: Dirección MAC no encontrada en MARKER_TO_MAC")
+            self.bt_connection = None
 
         # Estado de la política
         self.politica = {}
@@ -203,6 +218,10 @@ class RobotController:
         """
         Ejecuta el movimiento y actualiza el camino
         """
+        if not self.bt_connection:
+            logger.error(f"Robot {self.marker_id}: No hay conexión Bluetooth establecida.")
+            return "ERROR"
+
         logger.info(f"Robot {self.marker_id}: Ejecutando movimiento hacia: {direccion}")
         if direccion == "ARRIBA":
             self.ajustar_angulo(90)
@@ -237,6 +256,10 @@ class RobotController:
         """
         Entrena la política de Q-learning y la almacena.
         """
+        if not self.bt_connection:
+            logger.error(f"Robot {self.marker_id}: No hay conexión Bluetooth para entrenar la política.")
+            return
+
         logger.info(f"Robot {self.marker_id}: Iniciando entrenamiento de Q-learning...")
         policy_json = qlearn.train_and_get_policy(
             grid_size=(self.rows, self.cols),
@@ -461,8 +484,9 @@ def detect_shapes_in_image(image, rows, cols):
                 agent_type = roles[marker_id]
                 robot_controller = RobotController(marker_id, maze, agent_type=agent_type)
                 robot_controllers[marker_id] = robot_controller
-                # Iniciar entrenamiento de política
-                robot_controller.train_policy()
+                # Iniciar entrenamiento de política si la conexión Bluetooth fue exitosa
+                if robot_controller.bt_connection:
+                    robot_controller.train_policy()
 
     print(detected_shapes)
     return detected_shapes
@@ -671,7 +695,7 @@ def cambiar_roles():
         if marker_id in roles:
             controller.agent_type = roles[marker_id]
             logger.info(f"Robot {marker_id}: Rol actualizado a {'Policía' if roles[marker_id] == 0 else 'Ladrón'}")
-            if not controller.policy_generated:
+            if not controller.policy_generated and controller.bt_connection:
                 controller.train_policy()
 
     return jsonify({
@@ -722,7 +746,7 @@ def detect_shapes_endpoint():
         # Copiar el frame para no modificar la referencia global
         frame_copy = latest_frame.copy()
         # Dibujar la grilla y detectar formas
-        shapes = detect_shapes_in_image(frame_copy, rows, cols)
+        shapes, _ = detect_qr_in_image(frame_copy, rows, cols, cv2.QRCodeDetector())
         shapes = validate_and_convert_dict(shapes)
         return jsonify(shapes)
     else:
