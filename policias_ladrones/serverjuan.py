@@ -1,4 +1,4 @@
-# server.py
+# serverjuan.py
 
 from flask import Flask, jsonify, request, Response
 import cv2
@@ -11,6 +11,7 @@ import json
 from collections import deque
 import comunicacionBluetooth  # Asegúrate de que este módulo esté correctamente implementado
 import qlearn  # Importamos nuestro módulo de Q-learning
+from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos  # Importación correcta
 
 app = Flask(__name__)
 
@@ -489,23 +490,6 @@ def validate_and_convert_dict(input_data):
                 input_data[i] = validate_and_convert_dict(item)
 
     return input_data
-
-# ==============================
-# Función para obtener la salida del laberinto
-# (Implementa según tu lógica en gridworld_utils)
-# ==============================
-
-def obtener_salida(mapa_descriptivo):
-    # Implementa esta función según tu módulo gridworld_utils
-    return obtener_salida(mapa_descriptivo)
-
-def obtener_obstaculos(mapa_descriptivo):
-    # Implementa esta función según tu módulo gridworld_utils
-    return obtener_obstaculos(mapa_descriptivo)
-
-def obtener_mapa_descriptivo(maze):
-    # Implementa esta función según tu módulo gridworld_utils
-    return obtener_mapa_descriptivo(maze)
 
 # ==============================
 # Función para detectar y procesar QR en la imagen
