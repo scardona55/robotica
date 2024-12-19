@@ -5,17 +5,20 @@ import math
 import time
 import logging
 import json
+import requests
 import comunicacionBluetooth  # Asegúrate de que este módulo esté correctamente implementado
 from collections import deque
 from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos
-import qlearn  # Importamos nuestro módulo de Q-learning
+import qlearn
+import sarsa
+import argparse
 
 # ==============================
 # Configuración del Logging
 # ==============================
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Nivel de logging para depuración
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler()
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Parámetros de la Cámara y Resolución
 # ==============================
 
-URL = "http://192.168.37.118:4747/video"  # Cambia esta URL según tu configuración
+CAMERA_SOURCE = "http://192.168.37.118:4747/video"  # URL de DroidCam
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
@@ -35,15 +38,53 @@ FRAME_HEIGHT = 480
 # Parámetros de la Cuadrícula
 # ==============================
 
-ROWS = 4
-COLS = 4
+ROWS = 4  # Se actualizarán dinámicamente
+COLS = 4  # Se actualizarán dinámicamente
 THICKNESS = 1
 
 CANNY_THRESHOLD1 = 50
 CANNY_THRESHOLD2 = 150
 
 # Intervalo para enviar comandos al Arduino (en frames)
-COMMAND_INTERVAL = 48
+COMMAND_INTERVAL = 96
+
+# ==============================
+# Función para Cargar el Mapa desde el Endpoint
+# ==============================
+
+def fetch_maze_data():
+    """
+    Realiza una solicitud GET al endpoint para obtener el mapa del laberinto.
+
+    Retorna:
+        list of list of int: Mapa del laberinto donde 0 es pasillo y 1 es obstáculo.
+        None: Si ocurre un error al obtener o procesar el mapa.
+    """
+    url = "https://77c1-2803-1800-4202-201-d89c-e9f9-d163-b844.ngrok-free.app/maze"
+    logger.debug(f"Intentando obtener el mapa desde el endpoint: {url}")
+    try:
+        response = requests.get(url, timeout=10)  # Añadido timeout para evitar bloqueos
+        response.raise_for_status()  # Lanza una excepción si hay un error HTTP
+        data = response.json()  # Convierte la respuesta JSON a un diccionario
+        logger.debug(f"Respuesta del endpoint: {data}")
+        
+        # Verificar que el mapa sea una lista de listas y que contenga solo 0 y 1
+        if isinstance(data, list) and all(isinstance(row, list) for row in data):
+            for row in data:
+                if not all(cell in [0, 1] for cell in row):
+                    logger.error("El mapa contiene valores inválidos. Solo se permiten 0 y 1.")
+                    return None
+            logger.info("Mapa cargado correctamente desde el endpoint.")
+            return data
+        else:
+            logger.error("El formato del mapa es inválido. Debe ser una lista de listas.")
+            return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ocurrió un error al obtener el mapa: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Error al decodificar JSON: {e}")
+        return None
 
 # ==============================
 # Clase para Controlar el Estado del Robot
@@ -57,15 +98,18 @@ class RobotController:
         self.cols = len(maze[0])
         
         # Información de posición y navegación
-        self.current_row = None
-        self.current_col = None
-        self.current_angle = None
+        self.current_row = 0
+        self.current_col = 0
+        self.current_angle = 0  # Inicializar con un ángulo predeterminado
         self.target = obtener_salida(obtener_mapa_descriptivo(maze))  # Salida
         
         # Estado de navegación
         self.path = []  
         self.intentos_alineacion = 0
         self.movimiento_en_curso = False
+        
+        # Bandera para evitar comandos repetidos
+        self.last_command = None
 
     def calcular_camino_optimo(self):
         if self.current_row is None or self.current_col is None:
@@ -99,7 +143,7 @@ class RobotController:
         logger.error("No se encontró un camino al objetivo")
         return []
 
-    def ajustar_angulo(self, objetivo_angulo):
+    def ajustar_angulo(self, objetivo_angulo, algoritmo):
         margen_tolerancia = 20
         diff = (objetivo_angulo - self.current_angle + 360) % 360
 
@@ -111,15 +155,21 @@ class RobotController:
         # Determinar la dirección óptima del giro
         if diff > 180:
             logger.info("Giro a la izquierda.")
-            qlearn.turn_left()
+            if algoritmo == 'qlearning':
+                qlearn.turn_left()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_left()
             # Esperar a que el giro se complete
-            time.sleep(1)  # Ajusta este tiempo según la velocidad de giro de tu robot
+            time.sleep(0.5)  # Ajusta este tiempo según la velocidad de giro de tu robot
             self.current_angle = (self.current_angle - 90) % 360
         else:
             logger.info("Giro a la derecha.")
-            qlearn.turn_right()
+            if algoritmo == 'qlearning':
+                qlearn.turn_right()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_right()
             # Esperar a que el giro se complete
-            time.sleep(1)  # Ajusta este tiempo según la velocidad de giro de tu robot
+            time.sleep(0.5)  # Ajusta este tiempo según la velocidad de giro de tu robot
             self.current_angle = (self.current_angle + 90) % 360
 
         return self.current_angle
@@ -176,26 +226,41 @@ class RobotController:
 
         return "OBJETIVO_ALCANZADO"
 
-    def ejecutar_movimiento(self, direccion):
+    def ejecutar_movimiento(self, direccion, algoritmo):
         """
         Ejecuta el movimiento y actualiza el camino
         """
         logger.info(f"Ejecutando movimiento hacia: {direccion}")
         if direccion == "ARRIBA":
-            self.ajustar_angulo(90)
-            qlearn.move_forward()
+            self.ajustar_angulo(90, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.move_forward()
+            elif algoritmo == 'sarsa':
+                sarsa.move_forward()
         elif direccion == "ABAJO":
-            self.ajustar_angulo(270)
-            qlearn.move_forward()
+            self.ajustar_angulo(270, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.move_forward()
+            elif algoritmo == 'sarsa':
+                sarsa.move_forward()
         elif direccion == "IZQUIERDA":
-            self.ajustar_angulo(180)
-            qlearn.turn_left()
+            self.ajustar_angulo(180, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.turn_left()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_left()
         elif direccion == "DERECHA":
-            self.ajustar_angulo(0)
-            qlearn.turn_right()
+            self.ajustar_angulo(0, algoritmo)
+            if algoritmo == 'qlearning':
+                qlearn.turn_right()
+            elif algoritmo == 'sarsa':
+                sarsa.turn_right()
         
         if self.path:
             self.path.pop(0)
+
+        # Actualizar última acción para evitar repetición
+        self.last_command = direccion
 
         return "CONTINUAR" if self.path else "TERMINADO"
 
@@ -393,37 +458,44 @@ def highlight_start_end(frame, rows, cols):
     return frame
 
 # ==============================
-# Funciones de Movimiento del Robot
-# ==============================
-
-# Las funciones de movimiento ahora están en qlearn.py y se llaman desde allí.
-# Por lo tanto, no es necesario redefinirlas aquí.
-# Si prefieres mantenerlas en main.py, simplemente mueve las funciones de qlearn.py a main.py y ajústalas.
-
-# ==============================
 # Función Principal
 # ==============================
 
 def main():
     global ROWS, COLS, CANNY_THRESHOLD1, CANNY_THRESHOLD2
 
-    # Abrir la fuente de video según la configuración
-    cap = cv2.VideoCapture(URL)
-    logger.info(f"Usando la URL de DroidCam: {URL}")
+    # Manejar argumentos de línea de comandos para seleccionar el algoritmo
+    parser = argparse.ArgumentParser(description='Navegación de Robot con Q-learning y SARSA')
+    parser.add_argument('--algo', type=str, choices=['qlearning', 'sarsa'], default='qlearning',
+                        help='Selecciona el algoritmo de aprendizaje: "qlearning" o "sarsa" (por defecto: qlearning)')
+    args = parser.parse_args()
+    algoritmo = args.algo.lower()
 
-    # Establecer una resolución más baja para mejorar el rendimiento
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    logger.info(f"Algoritmo seleccionado: {algoritmo.upper()}")
 
-    if not cap.isOpened():
-        logger.error("No se pudo conectar a la cámara seleccionada.")
+    # Obtener el mapa desde el endpoint
+    maze = fetch_maze_data()
+    if maze is None:
+        logger.error("No se pudo obtener el mapa desde el endpoint. Se usará un mapa generado aleatoriamente.")
+        maze = maze_generate(ROWS, COLS)
+        logger.info("Mapa generado aleatoriamente.")
+    else:
+        logger.info("Mapa cargado exitosamente desde el endpoint.")
+
+    # Actualizar ROWS y COLS según el mapa cargado
+    ROWS = len(maze)
+    COLS = len(maze[0]) if ROWS > 0 else 0
+
+    if ROWS == 0 or COLS == 0:
+        logger.error("El mapa cargado está vacío. Terminando el programa.")
         return
 
-    logger.info(f"Conexión exitosa. Analizando video con cuadrícula de {ROWS}x{COLS}...")
-    maze = maze_generate(ROWS, COLS)
-    logger.debug("Mapa generado:")
-    for fila in maze:
-        logger.debug(fila)
+    # Verificar que todas las filas tengan la misma longitud
+    if not all(len(row) == COLS for row in maze):
+        logger.error("El mapa cargado no es rectangular. Todas las filas deben tener la misma longitud.")
+        return
+
+    logger.info(f"Mapa con dimensiones {ROWS}x{COLS} cargado.")
 
     mapa = obtener_mapa_descriptivo(maze)
     salida = obtener_salida(mapa)
@@ -437,14 +509,31 @@ def main():
 
     qr_detector = cv2.QRCodeDetector()
 
+    # Crear la fuente de video
+    cap = cv2.VideoCapture(CAMERA_SOURCE)
+    logger.info(f"Usando la fuente de video: {CAMERA_SOURCE}")
+
+    # Establecer una resolución más baja para mejorar el rendimiento
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+    if not cap.isOpened():
+        logger.error("No se pudo conectar a la cámara seleccionada.")
+        return
+
+    logger.info(f"Conexión exitosa. Analizando video con cuadrícula de {ROWS}x{COLS}...")
+
     # Crear el controlador del robot
     robot = RobotController(maze, qr_detector)
 
     # Inicializar contador para el envío de comandos
     frame_counter = 0
 
-    # Variables para Q-learning
-    Q = qlearn.inicializar_Q(mapa)
+    # Variables para aprendizaje por refuerzo
+    if algoritmo == 'qlearning':
+        Q = qlearn.inicializar_Q(mapa)
+    elif algoritmo == 'sarsa':
+        Q = sarsa.inicializar_Q(mapa)
     politica = {}
     policy_generated = False
 
@@ -472,7 +561,7 @@ def main():
                 break
 
             # Procesar el frame (solo para visualización)
-            _, frame_with_shapes = detect_qr_in_image(frame, ROWS, COLS, qr_detector)
+            detected_shapes, frame_with_shapes = detect_qr_in_image(frame, ROWS, COLS, qr_detector)
             frame_with_grid = draw_grid(frame_with_shapes, ROWS, COLS, THICKNESS)
             frame_filled = fill_cells(frame_with_grid, maze)
             frame_highlighted = highlight_start_end(frame_filled, ROWS, COLS)
@@ -484,27 +573,40 @@ def main():
             if frame_counter % COMMAND_INTERVAL == 0 and not policy_generated:
                 # Verificar si el robot está en la posición inicial
                 if (robot.current_row, robot.current_col) == (0, 0):
-                    logger.info("Robot en posición inicial. Iniciando Q-learning...")
-                    print("Calculando política...")
-                    Q, politica = qlearn.entrenar_Q_learning(
-                        maze=maze,
-                        Q=Q,
-                        salida=salida,
-                        alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
-                        gamma=0.9,
-                        epsilon=1.0,
-                        min_epsilon=0.1,
-                        decay_rate=0.995,
-                        episodes=1000   # Puedes ajustar el número de episodios
-                    )
+                    logger.info(f"Robot en posición inicial. Iniciando {algoritmo.upper()}...")
+                    print(f"Calculando política con {algoritmo.upper()}...")
+                    if algoritmo == 'qlearning':
+                        Q, politica = qlearn.entrenar_Q_learning(
+                            maze=maze,
+                            Q=Q,
+                            salida=salida,
+                            alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
+                            gamma=0.9,
+                            epsilon=1.0,
+                            min_epsilon=0.1,
+                            decay_rate=0.995,
+                            episodes=1000   # Puedes ajustar el número de episodios
+                        )
+                    elif algoritmo == 'sarsa':
+                        Q, politica = sarsa.entrenar_SARSA(
+                            maze=maze,
+                            Q=Q,
+                            salida=salida,
+                            alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
+                            gamma=0.9,
+                            epsilon=1.0,
+                            epsilon_min=0.1,
+                            epsilon_decay=0.995,
+                            episodes=1000   # Puedes ajustar el número de episodios
+                        )
                     policy_generated = True
-                    print("Política calculada. Ejecutando movimientos según la política...")
+                    print(f"Política calculada con {algoritmo.upper()}. Ejecutando movimientos según la política...")
                 else:
                     # Si no está en la posición inicial, buscar volver a ella
                     logger.info("El robot no está en la posición inicial. Volviendo a la posición inicial...")
                     direccion = robot.decidir_movimiento()
                     if direccion:
-                        resultado = robot.ejecutar_movimiento(direccion)
+                        resultado = robot.ejecutar_movimiento(direccion, algoritmo)
                         if resultado == "TERMINADO":
                             logger.info("El robot ha alcanzado la posición inicial (0,0).")
 
@@ -514,22 +616,39 @@ def main():
                 if estado_actual in politica:
                     accion = politica[estado_actual]
                     logger.info(f"Acción según la política en {estado_actual}: {accion}")
-                    # Ejecutar la acción
-                    if accion == 'up':
-                        robot.ajustar_angulo(90)
-                        qlearn.move_forward()
-                    elif accion == 'down':
-                        robot.ajustar_angulo(270)
-                        qlearn.move_forward()
-                    elif accion == 'left':
-                        robot.ajustar_angulo(180)
-                        qlearn.turn_left()
-                    elif accion == 'right':
-                        robot.ajustar_angulo(0)
-                        qlearn.turn_right()
                     
+                    # Evitar ejecutar el mismo comando consecutivamente
+                    if accion != robot.last_command:
+                        # Ejecutar la acción
+                        if accion == 'up':
+                            robot.ajustar_angulo(90, algoritmo)
+                            if algoritmo == 'qlearning':
+                                qlearn.move_forward()
+                            elif algoritmo == 'sarsa':
+                                sarsa.move_forward()
+                        elif accion == 'down':
+                            robot.ajustar_angulo(270, algoritmo)
+                            if algoritmo == 'qlearning':
+                                qlearn.move_forward()
+                            elif algoritmo == 'sarsa':
+                                sarsa.move_forward()
+                        elif accion == 'left':
+                            robot.ajustar_angulo(180, algoritmo)
+                            if algoritmo == 'qlearning':
+                                qlearn.turn_left()
+                            elif algoritmo == 'sarsa':
+                                sarsa.turn_left()
+                        elif accion == 'right':
+                            robot.ajustar_angulo(0, algoritmo)
+                            if algoritmo == 'qlearning':
+                                qlearn.turn_right()
+                            elif algoritmo == 'sarsa':
+                                sarsa.turn_right()
+                    else:
+                        logger.debug(f"Acción '{accion}' ya fue ejecutada. Esperando nueva detección.")
+
                     # Después de ejecutar la acción, esperar a que el robot actualice su posición
-                    time.sleep(1)  # Ajusta este tiempo según la velocidad de movimiento de tu robot
+                    time.sleep(0.5)  # Ajusta este tiempo según la velocidad de movimiento de tu robot
                 else:
                     logger.warning(f"No hay acción definida en la política para la posición {estado_actual}.")
 
