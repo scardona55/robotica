@@ -1,7 +1,10 @@
+# comunicacionBluetooth.py
+
 import socket
 import time
 
-bluetooth_socket=None
+bluetooth_socket = None
+
 # Función para conectar con Bluetooth
 def bluetooth_connect(mac_address):
     """
@@ -30,13 +33,21 @@ def send_command(message):
     """
     Enviar datos a través del socket Bluetooth
     """
+    global bluetooth_socket
     try:
-        bluetooth_socket.send(message.encode())
-        print(f"Comando enviado: {message}")
-        time.sleep(0.1)  # Pausa breve para evitar congestión
+        if bluetooth_socket:
+            bluetooth_socket.send(message.encode())
+            print(f"Comando enviado: {message}")
+            time.sleep(0.1)  # Pausa breve para evitar congestión
+        else:
+            print("No hay conexión Bluetooth establecida.")
     except Exception as e:
         print(f"Error al enviar datos: {e}")
-TARGET_MAC = "00:1B:10:21:2C:1B"  # Reemplaza con la dirección MAC de tu dispositivo
 
-# Establecer conexión
-bluetooth_socket = bluetooth_connect(TARGET_MAC)
+# Función para cerrar la conexión Bluetooth
+def close_connection():
+    global bluetooth_socket
+    if bluetooth_socket:
+        bluetooth_socket.close()
+        print("Conexión Bluetooth cerrada.")
+        bluetooth_socket = None
