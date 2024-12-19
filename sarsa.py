@@ -5,6 +5,7 @@ from collections import defaultdict
 import time
 import comunicacionBluetooth
 from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos
+from qlearn import obtener_recompensa, seleccionar_accion
 
 logger = logging.getLogger(__name__)
 
@@ -29,82 +30,36 @@ def inicializar_Q(mapa):
                 Q[estado] = {accion: 0.0 for accion in acciones}
     return Q
 
-def seleccionar_accion(Q, estado, epsilon):
+def actualizar_Q(Q, estado, accion, recompensa, siguiente_estado, siguiente_accion, alpha, gamma):
     """
-    Selecciona una acción usando la política epsilon-greedy.
-    """
-    if random.uniform(0, 1) < epsilon:
-        # Exploración: seleccionar una acción aleatoria válida
-        accion = random.choice(list(Q[estado].keys()))
-    else:
-        # Explotación: seleccionar la acción con el mayor valor Q
-        max_valor = max(Q[estado].values())
-        acciones_max = [accion for accion, valor in Q[estado].items() if valor == max_valor]
-        accion = random.choice(acciones_max)
-    return accion
+    Actualiza el valor Q para un estado y acción dada.
 
-def actualizar_Q(Q, estado, accion, recompensa, siguiente_estado, alpha, gamma):
-    """
+    Parámetros:
     Q (dict): Tabla Q.
     estado (tuple): Estado actual (fila, columna).
     accion (str): Acción ejecutada.
     recompensa (float): Recompensa obtenida.
     siguiente_estado (tuple): Estado resultante después de la acción.
+    siguiente_accion (str): Acción que se tomará en el siguiente estado.
     alpha (float): Tasa de aprendizaje.
     gamma (float): Factor de descuento.
+
+    Retorna:
+    None
     """
-    if siguiente_estado not in Q:
-        # Si el siguiente estado no está en Q, lo inicializamos
-        Q[siguiente_estado] = {a: 0.0 for a in ['up', 'down', 'left', 'right']}
-    max_Q_siguiente = max(Q[siguiente_estado].values())
-    Q[estado][accion] = Q[estado][accion] + alpha * (recompensa + gamma * max_Q_siguiente - Q[estado][accion])
-
-def obtener_recompensa(estado, accion, mapa, salida):
-    """
-    estado (tuple): Estado actual (fila, columna).
-    accion (str): Acción ejecutada.
-    mapa (list of list of str): Mapa descriptivo.
-    salida (tuple): Posición de la salida.
-    """
-    fila, columna = estado
-    # Simular la acción para ver el siguiente estado
-    if accion == 'up':
-        fila_siguiente = fila - 1
-        columna_siguiente = columna
-    elif accion == 'down':
-        fila_siguiente = fila + 1
-        columna_siguiente = columna
-    elif accion == 'left':
-        fila_siguiente = fila
-        columna_siguiente = columna - 1
-    elif accion == 'right':
-        fila_siguiente = fila
-        columna_siguiente = columna + 1
-    else:
-        fila_siguiente, columna_siguiente = fila, columna  # Acción inválida
-
-    # Verificar si está fuera del mapa
-    if fila_siguiente < 0 or fila_siguiente >= len(mapa) or columna_siguiente < 0 or columna_siguiente >= len(mapa[0]):
-        return -100  # Penalización por intentar moverse fuera del mapa
-
-    # Verificar si es un obstáculo
-    if mapa[fila_siguiente][columna_siguiente] == 'O':
-        return -100  # Penalización por chocar con un obstáculo
-
-    # Verificar si ha llegado a la salida
-    if (fila_siguiente, columna_siguiente) == salida:
-        return 100  # Recompensa por llegar a la salida
-
-    # Penalización por cada paso para incentivar caminos más cortos
-    return -1
+    Q[estado][accion] = Q[estado][accion] + alpha * (recompensa + gamma * Q[siguiente_estado][siguiente_accion] - Q[estado][accion])
 
 def obtener_siguiente_estado(estado, accion, maze):
     """
     Obtiene el siguiente estado basado en la acción ejecutada.
+
     Parámetros:
     estado (tuple): Estado actual (fila, columna).
     accion (str): Acción ejecutada ('up', 'down', 'left', 'right').
     maze (list of list of int): Mapa original del laberinto (0: pasillo, 1: obstáculo).
+
+    Retorna:
+    tuple: Nuevo estado (fila, columna).
     """
     fila, columna = estado
     if accion == 'up':
@@ -120,7 +75,7 @@ def obtener_siguiente_estado(estado, accion, maze):
         fila_siguiente = fila
         columna_siguiente = columna + 1
     else:
-        fila_siguiente, columna_siguiente = fila, columna  # Acción inválida
+        fila_siguiente, columna_siguiente = fila, columna  #La acción es inválida
 
     # Verificar límites y obstáculos
     if fila_siguiente < 0 or fila_siguiente >= len(maze) or columna_siguiente < 0 or columna_siguiente >= len(maze[0]):
@@ -146,9 +101,18 @@ def generar_politica(Q):
         politica[estado] = mejor_accion  # Usar tupla para las claves
     return politica
 
-def guardar_Q_politica(Q, politica, archivo_q='Q_table.json', archivo_politica='policy.json'):
+def guardar_Q_politica(Q, politica, archivo_q='Q_table_sarsa.json', archivo_politica='policy_sarsa.json'):
     """
     Guarda la tabla Q y la política en archivos JSON.
+
+    Parámetros:
+    Q (dict): Tabla Q.
+    politica (dict): Política derivada de Q.
+    archivo_q (str): Nombre del archivo para Q-table.
+    archivo_politica (str): Nombre del archivo para la política.
+
+    Retorna:
+    None
     """
     # Convertir las claves de Q a strings para JSON
     Q_serializable = {str(k): v for k, v in Q.items()}
@@ -162,7 +126,17 @@ def guardar_Q_politica(Q, politica, archivo_q='Q_table.json', archivo_politica='
 
     logger.info(f"Q-table y política guardadas en {archivo_q} y {archivo_politica} respectivamente.")
 
-def cargar_Q_politica(archivo_q='Q_table.json', archivo_politica='policy.json'):
+def cargar_Q_politica(archivo_q='Q_table_sarsa.json', archivo_politica='policy_sarsa.json'):
+    """
+    Carga la tabla Q y la política desde archivos JSON.
+
+    Parámetros:
+    archivo_q (str): Nombre del archivo para Q-table.
+    archivo_politica (str): Nombre del archivo para la política.
+
+    Retorna:
+    tuple: (Q, politica)
+    """
     with open(archivo_q, 'r') as f:
         Q = json.load(f)
         # Convertir las claves de string a tuplas
@@ -176,31 +150,52 @@ def cargar_Q_politica(archivo_q='Q_table.json', archivo_politica='policy.json'):
     logger.info(f"Q-table y política cargadas desde {archivo_q} y {archivo_politica} respectivamente.")
     return Q, politica
 
-def entrenar_Q_learning(maze, Q, salida, alpha=0.1, gamma=0.9, epsilon=1.0, min_epsilon=0.1, decay_rate=0.995, episodes=1000):
+def entrenar_SARSA(maze, Q, salida, alpha=0.1, gamma=0.9, epsilon=1.0, epsilon_min=0.1, epsilon_decay=0.995, episodes=1000):
+    """
+    Entrena la tabla Q utilizando el algoritmo SARSA.
 
-    logger.info("Iniciando entrenamiento de Q-learning...")
+    Parámetros:
+    maze (list of list of int): Mapa original del laberinto.
+    Q (dict): Tabla Q inicializada.
+    salida (tuple): Posición de la salida.
+    alpha (float): Tasa de aprendizaje.
+    gamma (float): Factor de descuento.
+    epsilon (float): Tasa de exploración inicial.
+    epsilon_min (float): Tasa de exploración mínima.
+    epsilon_decay (float): Tasa de decaimiento de epsilon.
+    episodes (int): Número de episodios de entrenamiento.
+
+    Retorna:
+    tuple: (Q, politica)
+    """
+    logger.info("Iniciando entrenamiento de SARSA...")
     mapa = obtener_mapa_descriptivo(maze)
 
     for episodio in range(episodes):
         estado_actual = (0, 0)  # Estado inicial
+        accion_actual = seleccionar_accion(Q, estado_actual, epsilon)
         pasos = 0
         max_pasos = len(maze) * len(maze[0])  # Limitar pasos por episodio
         terminado = False
 
         while not terminado and pasos < max_pasos:
-            accion = seleccionar_accion(Q, estado_actual, epsilon)
-            siguiente_estado = obtener_siguiente_estado(estado_actual, accion, maze)
-            recompensa = obtener_recompensa(estado_actual, accion, mapa, salida)
-            actualizar_Q(Q, estado_actual, accion, recompensa, siguiente_estado, alpha, gamma)
+            siguiente_estado = obtener_siguiente_estado(estado_actual, accion_actual, maze)
+            recompensa = obtener_recompensa(estado_actual, accion_actual, mapa, salida)
+            accion_siguiente = seleccionar_accion(Q, siguiente_estado, epsilon)
+
+            # Actualizar Q-table usando SARSA
+            actualizar_Q(Q, estado_actual, accion_actual, recompensa, siguiente_estado, accion_siguiente, alpha, gamma)
+
             estado_actual = siguiente_estado
+            accion_actual = accion_siguiente
 
             if estado_actual == salida:
                 terminado = True
             pasos += 1
 
         # Reducir la tasa de exploración
-        if epsilon > min_epsilon:
-            epsilon *= decay_rate
+        if epsilon > epsilon_min:
+            epsilon *= epsilon_decay
 
         # Mostrar progreso cada 100 episodios
         if (episodio + 1) % 100 == 0:

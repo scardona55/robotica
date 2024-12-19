@@ -5,14 +5,15 @@ import math
 import time
 import logging
 import json
-import comunicacionBluetooth  # Asegúrate de que este módulo esté correctamente implementado
+import comunicacionBluetooth  
 from collections import deque
 from gridworld_utils import obtener_mapa_descriptivo, obtener_salida, obtener_obstaculos
 import qlearn  # Importamos nuestro módulo de Q-learning
+import sarsa
+import argparse
 
 # ==============================
 # Configuración del Logging
-# ==============================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,29 +26,26 @@ logger = logging.getLogger(__name__)
 
 # ==============================
 # Parámetros de la Cámara y Resolución
-# ==============================
 
-URL = "http://192.168.37.118:4747/video"  # Cambia esta URL según tu configuración
+URL = "http://192.168.37.118:4747/video" 
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # ==============================
 # Parámetros de la Cuadrícula
-# ==============================
 
-ROWS = 4
-COLS = 4
+ROWS = 5
+COLS = 5
 THICKNESS = 1
 
 CANNY_THRESHOLD1 = 50
 CANNY_THRESHOLD2 = 150
 
 # Intervalo para enviar comandos al Arduino (en frames)
-COMMAND_INTERVAL = 48
+COMMAND_INTERVAL = 72
 
 # ==============================
 # Clase para Controlar el Estado del Robot
-# ==============================
 
 class RobotController:
     def __init__(self, maze, qr_detector):
@@ -212,7 +210,6 @@ class RobotController:
 
 # ==============================
 # Funciones de Generación y Dibujo del Laberinto
-# ==============================
 
 def maze_generate(filas, columnas):
     laberinto = [[1 for _ in range(columnas)] for _ in range(filas)]
@@ -393,19 +390,19 @@ def highlight_start_end(frame, rows, cols):
     return frame
 
 # ==============================
-# Funciones de Movimiento del Robot
-# ==============================
-
-# Las funciones de movimiento ahora están en qlearn.py y se llaman desde allí.
-# Por lo tanto, no es necesario redefinirlas aquí.
-# Si prefieres mantenerlas en main.py, simplemente mueve las funciones de qlearn.py a main.py y ajústalas.
-
-# ==============================
 # Función Principal
-# ==============================
 
 def main():
     global ROWS, COLS, CANNY_THRESHOLD1, CANNY_THRESHOLD2
+
+    # Manejar argumentos de línea de comandos para seleccionar el algoritmo
+    parser = argparse.ArgumentParser(description='Navegación de Robot con Q-learning y SARSA')
+    parser.add_argument('--algo', type=str, choices=['qlearning', 'sarsa'], default='qlearning',
+                        help='Selecciona el algoritmo de aprendizaje: "qlearning" o "sarsa" (por defecto: qlearning)')
+    args = parser.parse_args()
+    algoritmo = args.algo.lower()
+
+    logger.info(f"Algoritmo seleccionado: {algoritmo.upper()}")
 
     # Abrir la fuente de video según la configuración
     cap = cv2.VideoCapture(URL)
@@ -443,8 +440,11 @@ def main():
     # Inicializar contador para el envío de comandos
     frame_counter = 0
 
-    # Variables para Q-learning
-    Q = qlearn.inicializar_Q(mapa)
+    # Variables para aprendizaje por refuerzo
+    if algoritmo == 'qlearning':
+        Q = qlearn.inicializar_Q(mapa)
+    elif algoritmo == 'sarsa':
+        Q = sarsa.inicializar_Q(mapa)
     politica = {}
     policy_generated = False
 
@@ -484,21 +484,34 @@ def main():
             if frame_counter % COMMAND_INTERVAL == 0 and not policy_generated:
                 # Verificar si el robot está en la posición inicial
                 if (robot.current_row, robot.current_col) == (0, 0):
-                    logger.info("Robot en posición inicial. Iniciando Q-learning...")
-                    print("Calculando política...")
-                    Q, politica = qlearn.entrenar_Q_learning(
-                        maze=maze,
-                        Q=Q,
-                        salida=salida,
-                        alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
-                        gamma=0.9,
-                        epsilon=1.0,
-                        min_epsilon=0.1,
-                        decay_rate=0.995,
-                        episodes=1000   # Puedes ajustar el número de episodios
-                    )
+                    logger.info(f"Robot en posición inicial. Iniciando {algoritmo.upper()}...")
+                    print(f"Calculando política con {algoritmo.upper()}...")
+                    if algoritmo == 'qlearning':
+                        Q, politica = qlearn.entrenar_Q_learning(
+                            maze=maze,
+                            Q=Q,
+                            salida=salida,
+                            alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
+                            gamma=0.9,
+                            epsilon=1.0,
+                            min_epsilon=0.1,
+                            decay_rate=0.995,
+                            episodes=1000   # Puedes ajustar el número de episodios
+                        )
+                    elif algoritmo == 'sarsa':
+                        Q, politica = sarsa.entrenar_SARSA(
+                            maze=maze,
+                            Q=Q,
+                            salida=salida,
+                            alpha=0.1,    # Puedes ajustar estos parámetros si lo deseas
+                            gamma=0.9,
+                            epsilon=1.0,
+                            epsilon_min=0.1,
+                            epsilon_decay=0.995,
+                            episodes=1000   # Puedes ajustar el número de episodios
+                        )
                     policy_generated = True
-                    print("Política calculada. Ejecutando movimientos según la política...")
+                    print(f"Política calculada con {algoritmo.upper()}. Ejecutando movimientos según la política...")
                 else:
                     # Si no está en la posición inicial, buscar volver a ella
                     logger.info("El robot no está en la posición inicial. Volviendo a la posición inicial...")
@@ -517,16 +530,28 @@ def main():
                     # Ejecutar la acción
                     if accion == 'up':
                         robot.ajustar_angulo(90)
-                        qlearn.move_forward()
+                        if algoritmo == 'qlearning':
+                            qlearn.move_forward()
+                        elif algoritmo == 'sarsa':
+                            sarsa.move_forward()
                     elif accion == 'down':
                         robot.ajustar_angulo(270)
-                        qlearn.move_forward()
+                        if algoritmo == 'qlearning':
+                            qlearn.move_forward()
+                        elif algoritmo == 'sarsa':
+                            sarsa.move_forward()
                     elif accion == 'left':
                         robot.ajustar_angulo(180)
-                        qlearn.turn_left()
+                        if algoritmo == 'qlearning':
+                            qlearn.turn_left()
+                        elif algoritmo == 'sarsa':
+                            sarsa.turn_left()
                     elif accion == 'right':
                         robot.ajustar_angulo(0)
-                        qlearn.turn_right()
+                        if algoritmo == 'qlearning':
+                            qlearn.turn_right()
+                        elif algoritmo == 'sarsa':
+                            sarsa.turn_right()
                     
                     # Después de ejecutar la acción, esperar a que el robot actualice su posición
                     time.sleep(1)  # Ajusta este tiempo según la velocidad de movimiento de tu robot

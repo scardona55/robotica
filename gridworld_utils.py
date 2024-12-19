@@ -134,17 +134,15 @@ def visualize_policy(policy, width, height, obstacles, goal):
                     row += "? "
         print(row)
 
-# gridworld_utils.py
-
 def obtener_mapa_descriptivo(maze):
     """
     Transforma la matriz del laberinto en una representación descriptiva con etiquetas.
     
     Parámetros:
-    maze (list of list of int): Mapa del laberinto donde 0 es pasillo y 1 es obstáculo.
+    maze (list of list of int): Mapa del laberinto 0 camino - 1 obstáculo.
     
     Retorna:
-    list of list of str: Mapa descriptivo con 'S' (Inicio), 'E' (Salida), 'O' (Obstáculo), 'P' (Pasillo).
+    list of list of str: Mapa descriptivo con 'S' (Inicio), 'E' (Salida), 'O' (Obstáculo), 'P' (camino).
     """
     rows = len(maze)
     cols = len(maze[0])
@@ -163,11 +161,6 @@ def obtener_mapa_descriptivo(maze):
 
 def obtener_salida(mapa):
     """
-    Localiza la posición de la salida 'E' en el mapa descriptivo.
-    
-    Parámetros:
-    mapa (list of list of str): Mapa descriptivo con 'S', 'E', 'O', 'P'.
-    
     Retorna:
     tuple: Coordenadas (fila, columna) de la salida.
     """
@@ -179,12 +172,6 @@ def obtener_salida(mapa):
 
 def obtener_obstaculos(mapa):
     """
-    Identifica todas las posiciones de los obstáculos 'O' en el mapa descriptivo.
-    
-    Parámetros:
-    mapa (list of list of str): Mapa descriptivo con 'S', 'E', 'O', 'P'.
-    
-    Retorna:
     list of tuple: Lista de coordenadas (fila, columna) de los obstáculos.
     """
     obstaculos = []
