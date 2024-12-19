@@ -144,7 +144,7 @@ class RobotController:
         return []
 
     def ajustar_angulo(self, objetivo_angulo, algoritmo):
-        margen_tolerancia = 20
+        margen_tolerancia = 30
         diff = (objetivo_angulo - self.current_angle + 360) % 360
 
         # Verificar si el ángulo ya está alineado

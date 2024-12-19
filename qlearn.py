@@ -215,25 +215,25 @@ def entrenar_Q_learning(maze, Q, salida, alpha=0.1, gamma=0.9, epsilon=1.0, min_
     return Q, politica
 
 def move_forward():
-    for _ in range(12):
+    for _ in range(8):
         comunicacionBluetooth.send_command('w')
         time.sleep(0.05)  # Pausa de 50 ms entre comandos
     logger.info("Movimiento hacia adelante ejecutado.")
 
 def move_back():
-    for _ in range(12):
+    for _ in range(8):
         comunicacionBluetooth.send_command('s')
         time.sleep(0.05)  # Pausa de 50 ms entre comandos
     logger.info("Movimiento hacia atrás ejecutado.")
 
 def turn_left():
-    for _ in range(45):
+    for _ in range(40):
         comunicacionBluetooth.send_command('d')
         time.sleep(0.05)  # Pausa de 50 ms entre comandos
     logger.info("Giro a la izquierda ejecutado.")
 
 def turn_right():
-    for _ in range(45):
+    for _ in range(40):
         comunicacionBluetooth.send_command('a')
         time.sleep(0.05)  # Pausa de 50 ms entre comandos
     logger.info("Giro a la derecha ejecutado.")
