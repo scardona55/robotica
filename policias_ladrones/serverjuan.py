@@ -13,6 +13,7 @@ import gym
 from gym import spaces
 import pandas as pd
 import os
+import comunicacionBluetooth
 
 # Asegúrate de tener instalados los siguientes paquetes:
 # pip install flask opencv-python numpy gym pandas
